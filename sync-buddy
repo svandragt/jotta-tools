@@ -8,17 +8,45 @@ set -u
 DEADLINE=${SYNC_BUDDY_DEADLINE:-15}
 SINCE=${SYNC_BUDDY_SINCE:--30min}
 # Errors outlive the activity window: a loop that started hours ago is still
-# the reason nothing moves now, so they get their own, wider one.
-ERRSINCE=${SYNC_BUDDY_ERRSINCE:--24h}
+# the reason nothing moves now, so they get their own, wider one. Wide enough to
+# outlast the slowest retry that matters -- backup scans are hourly, and anything
+# under that makes hourly furniture read as breaking news -- and no wider, because
+# reading the journal is what this script spends its time on and the cost climbs
+# with the window: 4h is about a second, 24h about three.
+ERRSINCE=${SYNC_BUDDY_ERRSINCE:--4h}
+INTERVAL=${SYNC_BUDDY_INTERVAL:-30}
+
+# watch(1) already does the refresh loop, so re-exec under it rather than growing
+# one here. Only when stdout is a terminal: the canary runs this from a timer and
+# needs the exit code, which watch swallows. Each pass costs a jotta-cli query and
+# several journalctl reads, so the default interval is lazy, not watch's 2s.
+case ${1:-} in
+--once | -1) ;;
+*)
+	[ -t 1 ] && command -v watch >/dev/null 2>&1 &&
+		exec env SYNC_BUDDY_COLOR=1 watch -c -t -n "$INTERVAL" "$0" --once
+	;;
+esac
 
 bold=''; dim=''; red=''; green=''; yellow=''; off=''
-if [ -t 1 ]; then
+# Under watch stdout is a pipe, so -t 1 is false and the colours would vanish.
+if [ -t 1 ] || [ -n "${SYNC_BUDDY_COLOR:-}" ]; then
 	bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); red=$(printf '\033[31m')
 	green=$(printf '\033[32m'); yellow=$(printf '\033[33m'); off=$(printf '\033[0m')
 fi
 
 iec() { awk -v b="${1:-0}" 'BEGIN{split("B KiB MiB GiB TiB",u," ");i=1;while(b>=1024&&i<5){b/=1024;i++}printf (i==1?"%d %s":"%.1f %s"),b,u[i]}'; }
 row() { printf '  %-9s %s\n' "$1" "$2"; }
+
+# Error messages are long and the useful half -- the offending path -- is at the
+# end, so truncating to a fixed width threw away the answer. row() spends 12
+# columns on its indent and label. Under watch tput cannot see the terminal, but
+# watch clips lines itself, so guessing high there costs nothing.
+cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}
+msgw=$((cols - 13))
+[ "$msgw" -lt 40 ] && msgw=40
+clip() { cut -c"1-$1"; }
+clock() { printf '%s' "${1#*T}" | cut -c1-8; }
 
 printf '%sjotta sync buddy%s %s%s%s\n\n' "$bold" "$off" "$dim" "$(date '+%a %H:%M:%S')" "$off"
 
@@ -49,9 +77,19 @@ eval "$(printf '%s' "$status" | jq -r '
 	@sh "on=\(.Sync.Enabled//false) auto=\(.Sync.Automatic//false) root=\(.Sync.RootPath//"?")"
 ')"
 
+# One journalctl pass per window, because each window feeds two rows and reading a
+# busy journal is what this script spends its time on: the 24h window costs about
+# three seconds and the 30 minute one about one, so re-reading either doubles it.
+# The wide window is filtered on the way in -- 24h is some 280k lines and 70MB, far
+# too much to hold, while the errors within it are a few thousand.
+# full-check lines ride along in the same capture: they are the only positive
+# evidence sync works, and pulling them here costs nothing.
+errlog=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager -o short-iso 2>/dev/null |
+	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events|full-check' || true)
+recentlog=$(journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null || true)
+
 # The numeric SyncState has no published mapping; the journal spells the name out.
-last=$(journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null |
-	grep -E 'sync\.state \[' | tail -1)
+last=$(printf '%s' "$recentlog" | grep -E 'sync\.state \[' | tail -1)
 state=$(printf '%s' "$last" | sed -n 's/.*=> \[\([^]]*\)\].*/\1/p')
 
 # The state name alone cannot tell you stuck from quiet: a wedged loop leaves
@@ -76,6 +114,21 @@ extra=''
 [ "$on" = true ] || extra="$extra (sync disabled)"
 [ "$auto" = true ] || extra="$extra (manual)"
 row state "${shown}${dim}${extra}${off}"
+
+# Every other row says what jottad is doing, none of them whether it worked, so a
+# healthy run and a broken one both end up looking like a list of errors. A
+# completed full-check is the only positive evidence sync works; a loop stop newer
+# than the last completion is the plainest statement that it does not.
+checked=$(printf '%s\n' "$errlog" | grep -a 'full-check completed' | tail -1 | cut -d' ' -f1)
+stopped=$(printf '%s\n' "$errlog" | grep -a 'event loop stopped' | tail -1 | cut -d' ' -f1)
+if [ -n "$stopped" ] && { [ -z "$checked" ] || [ "$stopped" \> "$checked" ]; }; then
+	row verdict "${red}event loop stopped $(clock "$stopped"), no clean pass since${off}"
+elif [ -n "$checked" ]; then
+	row verdict "${green}clean${off}  ${dim}full-check completed $(clock "$checked")${off}"
+else
+	row verdict "${dim}no full-check in ${ERRSINCE#-}${off}"
+fi
+
 row local "$lf files  $(iec "$lb")  ${dim}$root${off}"
 row remote "$rf files  $(iec "$rb")"
 
@@ -86,13 +139,15 @@ else
 fi
 
 if [ "$rf" -gt "$lf" ]; then
-	row behind "$((rf - lf)) files  $(iec $((rb - lb)))"
+	# Not a backlog: a folder present remotely and absent locally sits here
+	# forever while sync still reports up to date. "behind" implied it drains.
+	row 'not local' "$((rf - lf)) files  $(iec $((rb - lb)))"
 fi
 
 # jottad counts its own failures during a scan. Zero is the normal case and the
 # line is noise, but a non-zero count is the only number that says files are
 # being left behind rather than merely queued.
-scanerr=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager 2>/dev/null |
+scanerr=$(printf '%s' "$errlog" |
 	sed -n 's/.*errors\[\([0-9]*\) files \([0-9]*\) bytes\].*/\1 \2/p' | grep -v '^0 ' | tail -1)
 if [ -n "$scanerr" ]; then
 	row failed "${red}$(echo "$scanerr" | cut -d' ' -f1) files${off}  ${dim}$(iec "$(echo "$scanerr" | cut -d' ' -f2)") last scan${off}"
@@ -101,49 +156,74 @@ fi
 # The stuck modes worth catching all look the same in the log: one error, over
 # and over. Matching a specific message would only catch the fault already seen
 # once, so count repeats instead and let whatever repeats most name itself.
-# Errors get a wider window than the activity tail below, because a retry loop
-# can be hours old and still be the reason nothing is moving.
-errs=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager 2>/dev/null |
-	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events' |
-	grep -avE 'errors\[0 files|not regular file|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting' || true)
+# RESOLVED lines are dropped because they repeat the error text they clear, which
+# makes them the longest line in the burst and so the one longest-wins picks.
+# "context canceled" goes the same way: it means something else stopped the
+# operation -- a restart, a superseded scan -- so it names the consequence and
+# never the cause, while looking like the newest fault. DeadlineExceeded, which is
+# a real timeout, spells itself differently and stays.
+# An empty errlog would survive printf as one blank line and fake a fault, hence
+# the guard rather than a bare grep.
+errs=''
+[ -n "$errlog" ] && errs=$(printf '%s\n' "$errlog" |
+	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)' || true)
 
 if [ -n "$errs" ]; then
-	# Collapse ids, hashes and durations so retries of one fault group together.
-	norm='s/^.*pid:[0-9]+ [0-9\/]+ [0-9:]+ //
+	# Keep the timestamp, drop the log prefix, then collapse ids, hashes and
+	# durations so retries of one fault group together. Leaves TAB-separated
+	# "timestamp<TAB>message" for the grouping below.
+	norm='s/^([^ ]+) [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1\t/
+	      s/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/UUID/g
 	      s/[0-9a-f]{16,}/ID/g
 	      s/[0-9]+\.[0-9]+[munµ]?s/DUR/g
 	      s/\[[A-Za-z0-9_-]{8,}\]/[ID]/g'
 
-	# Lead with the newest error, not the most frequent one. A case collision
-	# stops the event loop after logging once, so ranking by count buries the
-	# thing that actually broke sync under whatever merely repeats a lot.
+	# Lead with the fault that STARTED most recently, not the newest line and not
+	# the most frequent. Ranking by newest line lets a fault that retries forever
+	# hold the row for good: it is newest again every time it fires, so a genuinely
+	# new problem never gets in, and the row stops being worth reading. First-seen
+	# demotes a chronic fault the moment anything else appears, while a fault that
+	# logs once and stops -- a case collision -- still wins on the strength of
+	# having only just begun.
 	#
 	# ponytail: one fault logs a burst of lines in the same second, and the
-	# longest of them is the one carrying the offending path. Longest-wins is a
-	# heuristic, not a parser; if jottad ever pads its short lines it picks
-	# wrong, and the fix is to match per-message formats instead.
-	ts=$(printf '%s\n' "$errs" | tail -1 | awk '{print $3}')
-	latest=$(printf '%s\n' "$errs" | awk -v t="$ts" '$3 == t' |
-		awk '{print length "\t" $0}' | sort -rn | head -1 | cut -f2- | sed -E "$norm")
-	reps=$(printf '%s\n' "$errs" | sed -E "$norm" | grep -cxF "$latest" || true)
+	# longest of them is the one carrying the offending path, so length breaks the
+	# tie. Longest-wins is a heuristic, not a parser; if jottad ever pads its short
+	# lines it picks wrong, and the fix is to match per-message formats instead.
+	pick=$(printf '%s\n' "$errs" | sed -E "$norm" | awk -F'\t' '
+		{ if (!($2 in first)) first[$2] = $1; last[$2] = $1; n[$2]++ }
+		END { for (m in first) printf "%s\t%s\t%d\t%d\t%s\n",
+			first[m], last[m], n[m], length(m), m }' |
+		sort -k1,1r -k4,4nr | head -1)
+
+	latest=$(printf '%s' "$pick" | cut -f5)
+	reps=$(printf '%s' "$pick" | cut -f3)
+	began=$(clock "$(printf '%s' "$pick" | cut -f1)")
+	ended=$(clock "$(printf '%s' "$pick" | cut -f2)")
 	total=$(printf '%s\n' "$errs" | wc -l | tr -d ' ')
 
-	row errors "${red}$(printf '%s' "$latest" | cut -c1-62)${off}"
-	[ "$reps" -gt 1 ] && row '' "${dim}seen ${reps}x${off}"
+	# Clock times, not ages: the window is 24h, so an age means guessing which day
+	# a bare time belongs to, and these read fine against the header timestamp.
+	# Both ends matter -- one fault at 23:05 is news, the same fault every hour
+	# since 07:21 is furniture, and only the pair tells you which this is.
+	when="at $began"
+	[ "$began" != "$ended" ] && when="$began - $ended, seen ${reps}x"
+	row errors "${red}$(printf '%s' "$latest" | clip "$msgw")${off}"
+	row '' "${dim}${when}${off}"
 
 	# A different error dominating by volume is its own symptom: that is what a
 	# retry loop looks like, so name it too when it is not the one above.
-	top=$(printf '%s\n' "$errs" | sed -E "$norm" | sort | uniq -c | sort -rn | head -1)
+	top=$(printf '%s\n' "$errs" | sed -E "$norm" | cut -f2- | sort | uniq -c | sort -rn | head -1)
 	n=$(printf '%s' "$top" | awk '{print $1}')
 	tmsg=$(printf '%s' "$top" | sed -E 's/^ *[0-9]+ +//')
 	if [ "$n" -ge 5 ] && [ "$tmsg" != "$latest" ]; then
-		row '' "${yellow}${n}x${off} ${dim}$(printf '%s' "$tmsg" | cut -c1-56)${off}"
+		row '' "${yellow}${n}x${off} ${dim}$(printf '%s' "$tmsg" | clip "$((msgw - 6))")${off}"
 	fi
 	row '' "${dim}$total error lines in ${ERRSINCE#-}${off}"
 fi
 
 printf '\n  %srecent%s\n' "$bold" "$off"
-journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null |
+printf '%s\n' "$recentlog" |
 	grep -E 'sync\.state|full-check|sync\.error|sync\.full\.error|Missing events|backup: full scan|queue for' |
 	tail -8 |
 	sed -E 's/^[0-9-]+T([0-9:]+)[^ ]* [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1  /

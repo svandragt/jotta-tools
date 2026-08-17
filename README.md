@@ -106,15 +106,45 @@ jotta sync buddy Mon 18:51:04
   daemon    running  pid 4321, up 06:24
   query     responsive
   state     Idle 12s ago
+  verdict   clean  full-check completed 18:46:18
   local     91234 files  40.2 GiB  /home/user/me/sync
   remote    98765 files  71.5 GiB
   transfer  idle
-  behind    7531 files  31.3 GiB
+  not local 7531 files  31.3 GiB
 
   recent
     18:46:18  * sync full-check completed in 1m32.404821291s
     18:46:19  sync.state [Idle] => [Evaluating] after 501.615159ms
 ```
+
+Run it with no arguments and it refreshes every 30 seconds, because watching a
+stall clear is the usual reason you opened it. To print one report and exit:
+
+```sh
+sync-buddy --once
+```
+
+Set `SYNC_BUDDY_INTERVAL` to change the refresh, in seconds. The refresh is
+`watch(1)`, and it only kicks in when output is a terminal, so a script or a
+timer gets a single report and a usable exit code without asking for `--once`.
+
+The `not local` row counts files the server holds and this machine does not. It
+is not a backlog draining: a folder deleted locally but kept remotely sits there
+for good, while sync still reports itself up to date.
+
+Read the `verdict` row first. Every other row reports what jottad is *doing*, and
+none of them says whether it worked — so a healthy machine and a broken one both
+show a list of errors, and there is no way to tell them apart at a glance. There
+are always some errors in a few hours of log. A completed full-check is the only
+positive evidence sync works:
+
+```
+  verdict   clean  full-check completed 18:46:18
+  verdict   event loop stopped 21:45:42, no clean pass since
+```
+
+The second form means a stop is more recent than the last completion, so nothing
+has synced since. That is the row to act on, whatever the `errors` row says.
 
 It adds the two things `jotta-cli status` will not tell you. The first is a
 different wedge from the one the canary catches: jottad accepts the connection
@@ -133,9 +163,9 @@ they are current, and `list uploaderrors` demands an `--uploadid` you can only
 get from a transfer that is still running. The service log is the only place a
 failure survives, so that is where `sync-buddy` reads.
 
-A worked example, and the reason the `errors` row leads with the newest fault
-rather than the most frequent one. Two files whose names differ only in case
-sync fine on Linux and collide on the server:
+A worked example, and the reason the `errors` row leads with the fault that
+started most recently rather than the most frequent one. Two files whose names
+differ only in case sync fine on Linux and collide on the server:
 
 ```sh
 echo one > ~/me/sync/casetest.txt
@@ -154,7 +184,7 @@ reports `Checking for changes...` and `Mode: listening to events`.
 ```
   state     Evaluating 0s ago
   errors    Error syncing /casetest.txt already exists with different case
-            seen 2x
+            23:14:02 - 23:15:32, seen 2x
             54 error lines in 24h
 ```
 
@@ -162,6 +192,39 @@ The collision logs once and then goes quiet, while routine warnings keep
 accumulating, so ranking errors by frequency hides the one that actually
 stopped sync. Deleting either side of the pair clears it, and the backlog
 drains on the next retry.
+
+Ranking by the newest *line* fails the same way, for a subtler reason. A fault
+that retries forever is newest again every time it fires, so it holds the row for
+good and nothing new ever gets in — which makes the row worthless precisely when
+you need it. First-seen fixes that: a chronic fault gives way as soon as anything
+else appears, while a fault that logs once and stops still leads, because it only
+just began.
+
+That is what the two times under the message are for. `at 23:06:39` on its own is
+a single event. A range with a count, `07:21:19 - 23:05:52, seen 12x`, is
+furniture — something that has been failing all day and will keep failing.
+
+A name the server refuses fails the same way, and this one is quieter because it
+never stops the loop. A directory whose name contains a newline is legal on
+Linux and rejected by the API, so the remote `mkdir` fails on every backup scan
+and everything under it is skipped:
+
+```
+  errors    error mkdir /backup/UUID/sander/.config/mozilla/firefox/pkQtSp
+            seen 6x
+```
+
+The journal carries the verdict on the following line, `INVALID_ARGUMENT code:
+12`. Sync and the rest of the backup carry on, so nothing looks broken; that
+subtree is just never on the server. Find the offending name, and note that `ls`
+shows nothing wrong because the newline reads as a line break:
+
+```sh
+find ~ -depth -name '*
+*' -print0 | xargs -0 -n1 echo
+```
+
+Rename or delete what it finds, and the next scan picks the subtree up.
 
 Recent activity is read from the journal too, because the state names (`Idle`,
 `Evaluating`, `Working`) only appear there. `SyncState` in the JSON is an
