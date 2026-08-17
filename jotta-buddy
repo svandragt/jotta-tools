@@ -1,20 +1,27 @@
 #!/bin/sh
-# Jottacloud sync at a glance: is jottad alive, what state, and what has it done lately.
-# jotta-cli status already prints the totals; this adds the two things it does not:
-# a wedge check (jottad accepts the connection but never answers) and recent activity.
+# Jottacloud at a glance: is jottad alive, and are sync and backup each working.
+# jotta-cli status already prints the totals; this adds the three things it does not:
+# a wedge check (jottad accepts the connection but never answers), a verdict per
+# subsystem, and recent activity.
+#
+# Sync and backup are reported apart because they fail differently. Sync stops its
+# event loop and goes quiet, so it fails loudly. Backup keeps cycling whatever
+# happens, so it fails silently and can skip a subtree for months without a whisper.
+# One shared error list hid that: a backup fault logged after a clean sync pass read
+# as sync contradicting itself.
 
 set -u
 
-DEADLINE=${SYNC_BUDDY_DEADLINE:-15}
-SINCE=${SYNC_BUDDY_SINCE:--30min}
+DEADLINE=${JOTTA_BUDDY_DEADLINE:-15}
+SINCE=${JOTTA_BUDDY_SINCE:--30min}
 # Errors outlive the activity window: a loop that started hours ago is still
 # the reason nothing moves now, so they get their own, wider one. Wide enough to
 # outlast the slowest retry that matters -- backup scans are hourly, and anything
 # under that makes hourly furniture read as breaking news -- and no wider, because
 # reading the journal is what this script spends its time on and the cost climbs
 # with the window: 4h is about a second, 24h about three.
-ERRSINCE=${SYNC_BUDDY_ERRSINCE:--4h}
-INTERVAL=${SYNC_BUDDY_INTERVAL:-30}
+ERRSINCE=${JOTTA_BUDDY_ERRSINCE:--4h}
+INTERVAL=${JOTTA_BUDDY_INTERVAL:-30}
 
 # watch(1) already does the refresh loop, so re-exec under it rather than growing
 # one here. Only when stdout is a terminal: the canary runs this from a timer and
@@ -24,19 +31,25 @@ case ${1:-} in
 --once | -1) ;;
 *)
 	[ -t 1 ] && command -v watch >/dev/null 2>&1 &&
-		exec env SYNC_BUDDY_COLOR=1 watch -c -t -n "$INTERVAL" "$0" --once
+		exec env JOTTA_BUDDY_COLOR=1 watch -c -t -n "$INTERVAL" "$0" --once
 	;;
 esac
 
 bold=''; dim=''; red=''; green=''; yellow=''; off=''
 # Under watch stdout is a pipe, so -t 1 is false and the colours would vanish.
-if [ -t 1 ] || [ -n "${SYNC_BUDDY_COLOR:-}" ]; then
+if [ -t 1 ] || [ -n "${JOTTA_BUDDY_COLOR:-}" ]; then
 	bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); red=$(printf '\033[31m')
 	green=$(printf '\033[32m'); yellow=$(printf '\033[33m'); off=$(printf '\033[0m')
 fi
 
 iec() { awk -v b="${1:-0}" 'BEGIN{split("B KiB MiB GiB TiB",u," ");i=1;while(b>=1024&&i<5){b/=1024;i++}printf (i==1?"%d %s":"%.1f %s"),b,u[i]}'; }
 row() { printf '  %-9s %s\n' "$1" "$2"; }
+# Sub-rows belong to the subsystem verdict above them, so they indent under it.
+sub() { printf '    %-9s %s\n' "$1" "$2"; }
+# The label is padded inside the escapes, since %-9s counts invisible bytes as width
+# and would otherwise eat the padding it looks like it is applying.
+group() { printf '\n  %s%-9s%s %s\n' "$bold" "$1" "$off" "$2"; }
+secs() { [ "${1:-0}" -ge 60 ] && printf '%dm%ds' $(($1 / 60)) $(($1 % 60)) || printf '%ds' "${1:-0}"; }
 
 # Error messages are long and the useful half -- the offending path -- is at the
 # end, so truncating to a fixed width threw away the answer. row() spends 12
@@ -48,7 +61,7 @@ msgw=$((cols - 13))
 clip() { cut -c"1-$1"; }
 clock() { printf '%s' "${1#*T}" | cut -c1-8; }
 
-printf '%sjotta sync buddy%s %s%s%s\n\n' "$bold" "$off" "$dim" "$(date '+%a %H:%M:%S')" "$off"
+printf '%sjotta buddy%s %s%s%s\n\n' "$bold" "$off" "$dim" "$(date '+%a %H:%M:%S')" "$off"
 
 pid=$(systemctl --user show -P MainPID jottad 2>/dev/null)
 if [ -z "$pid" ] || [ "$pid" = 0 ]; then
@@ -74,8 +87,15 @@ eval "$(printf '%s' "$status" | jq -r '
 	@sh "lf=\(.Sync.Count.Files//0) lb=\(.Sync.Count.Bytes//0)",
 	@sh "rf=\(.Sync.RemoteCount.Files//0) rb=\(.Sync.RemoteCount.Bytes//0)",
 	@sh "up=\(.State.Uploading|length) dl=\(.State.Downloading|length)",
-	@sh "on=\(.Sync.Enabled//false) auto=\(.Sync.Automatic//false) root=\(.Sync.RootPath//"?")"
+	@sh "on=\(.Sync.Enabled//false) auto=\(.Sync.Automatic//false) root=\(.Sync.RootPath//"?")",
+	@sh "bkroots=\([.Backup.State.Enabled.Backups[]?]|length)",
+	@sh "bkf=\([.Backup.State.Enabled.Backups[]?.Count.Files]|add//0) bkb=\([.Backup.State.Enabled.Backups[]?.Count.Bytes]|add//0)"
 ')"
+
+# Backup roots one per line. Count is live, but History is not -- it sat on a scan
+# from seven hours earlier while the log showed one minutes old -- so the counts
+# come from here and the verdict below comes from the log.
+bkpaths=$(printf '%s' "$status" | jq -r '.Backup.State.Enabled.Backups[]? | .Path')
 
 # One journalctl pass per window, because each window feeds two rows and reading a
 # busy journal is what this script spends its time on: the 24h window costs about
@@ -87,7 +107,7 @@ eval "$(printf '%s' "$status" | jq -r '
 # ago sync last moved. Reading them from the 30 minute window left the state row
 # saying "unknown" on a perfectly healthy machine that had simply been quiet.
 errlog=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager -o short-iso 2>/dev/null |
-	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events|full-check|sync\.state' || true)
+	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events|full-check|sync\.state|backup: full scan' || true)
 recentlog=$(journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null || true)
 
 # The numeric SyncState has no published mapping; the journal spells the name out.
@@ -115,44 +135,69 @@ fi
 extra=''
 [ "$on" = true ] || extra="$extra (sync disabled)"
 [ "$auto" = true ] || extra="$extra (manual)"
-row state "${shown}${dim}${extra}${off}"
 
-# Every other row says what jottad is doing, none of them whether it worked, so a
-# healthy run and a broken one both end up looking like a list of errors. A
-# completed full-check is the only positive evidence sync works; a loop stop newer
-# than the last completion is the plainest statement that it does not.
+# Nothing else here says whether sync WORKED -- the rows all report what it is
+# doing -- so a healthy machine and a broken one both came out as a list of errors.
+# A completed full-check is the only positive evidence; a loop stop newer than the
+# last completion is the plainest statement that nothing has synced since.
 checked=$(printf '%s\n' "$errlog" | grep -a 'full-check completed' | tail -1 | cut -d' ' -f1)
 stopped=$(printf '%s\n' "$errlog" | grep -a 'event loop stopped' | tail -1 | cut -d' ' -f1)
 if [ -n "$stopped" ] && { [ -z "$checked" ] || [ "$stopped" \> "$checked" ]; }; then
-	row verdict "${red}event loop stopped $(clock "$stopped"), no clean pass since${off}"
+	group sync "${red}event loop stopped $(clock "$stopped"), no clean pass since${off}"
 elif [ -n "$checked" ]; then
-	row verdict "${green}clean${off}  ${dim}full-check completed $(clock "$checked")${off}"
+	group sync "${green}clean${off}  ${dim}full-check completed $(clock "$checked")${off}"
 else
-	row verdict "${dim}no full-check in ${ERRSINCE#-}${off}"
+	group sync "${dim}no full-check in ${ERRSINCE#-}${off}"
 fi
 
-row local "$lf files  $(iec "$lb")  ${dim}$root${off}"
-row remote "$rf files  $(iec "$rb")"
-
-if [ "$up" -gt 0 ] || [ "$dl" -gt 0 ]; then
-	row transfer "${yellow}up $up  down $dl${off}"
-else
-	row transfer "${dim}idle${off}"
-fi
+sub state "${shown}${dim}${extra}${off}"
+sub local "$lf files  $(iec "$lb")  ${dim}$root${off}"
+sub remote "$rf files  $(iec "$rb")"
 
 if [ "$rf" -gt "$lf" ]; then
 	# Not a backlog: a folder present remotely and absent locally sits here
 	# forever while sync still reports up to date. "behind" implied it drains.
-	row 'not local' "$((rf - lf)) files  $(iec $((rb - lb)))"
+	sub 'not local' "$((rf - lf)) files  $(iec $((rb - lb)))"
 fi
+
+if [ "$up" -gt 0 ] || [ "$dl" -gt 0 ]; then
+	sub transfer "${yellow}up $up  down $dl${off}"
+else
+	sub transfer "${dim}idle${off}"
+fi
+
+# Backup gets the same treatment, and needs it more: it never stops its loop, so
+# nothing about it looks wrong until you total up what never arrived. The scan line
+# in the log is the only current record -- History in the JSON lags by hours.
+bkdone=$(printf '%s\n' "$errlog" | grep -a 'backup: full scan.*completed' | tail -1)
+bkat=$(printf '%s' "$bkdone" | cut -d' ' -f1)
+bktook=$(printf '%s' "$bkdone" | sed -n 's/.*completed in \([0-9]*\)\..*/\1/p')
 
 # jottad counts its own failures during a scan. Zero is the normal case and the
 # line is noise, but a non-zero count is the only number that says files are
 # being left behind rather than merely queued.
 scanerr=$(printf '%s' "$errlog" |
 	sed -n 's/.*errors\[\([0-9]*\) files \([0-9]*\) bytes\].*/\1 \2/p' | grep -v '^0 ' | tail -1)
-if [ -n "$scanerr" ]; then
-	row failed "${red}$(echo "$scanerr" | cut -d' ' -f1) files${off}  ${dim}$(iec "$(echo "$scanerr" | cut -d' ' -f2)") last scan${off}"
+
+if [ "$bkroots" -eq 0 ]; then
+	group backup "${dim}none configured${off}"
+elif [ -n "$scanerr" ]; then
+	group backup "${red}$(echo "$scanerr" | cut -d' ' -f1) files failed${off}  ${dim}$(iec "$(echo "$scanerr" | cut -d' ' -f2)") last scan${off}"
+elif [ -n "$bkat" ]; then
+	group backup "${green}clean${off}  ${dim}scan completed $(clock "$bkat")${bktook:+ in $(secs "$bktook")}${off}"
+else
+	group backup "${yellow}no scan completed in ${ERRSINCE#-}${off}"
+fi
+
+# One root reads like sync's local row, with the path inline. Several need a line
+# each, and the count above them is then the total across all of them.
+if [ "$bkroots" -eq 1 ]; then
+	sub files "$bkf files  $(iec "$bkb")  ${dim}${bkpaths}${off}"
+elif [ "$bkroots" -gt 1 ]; then
+	sub files "$bkf files  $(iec "$bkb")  ${dim}across $bkroots roots${off}"
+	printf '%s\n' "$bkpaths" | while IFS= read -r p; do
+		[ -n "$p" ] && sub '' "${dim}$p${off}"
+	done
 fi
 
 # The stuck modes worth catching all look the same in the log: one error, over
@@ -168,7 +213,7 @@ fi
 # the guard rather than a bare grep.
 errs=''
 [ -n "$errlog" ] && errs=$(printf '%s\n' "$errlog" |
-	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)|sync\.state \[' || true)
+	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)|sync\.state \[|backup: full scan' || true)
 
 if [ -n "$errs" ]; then
 	# Keep the timestamp, drop the log prefix, then collapse ids, hashes and
@@ -210,7 +255,17 @@ if [ -n "$errs" ]; then
 	# since 07:21 is furniture, and only the pair tells you which this is.
 	when="at $began"
 	[ "$began" != "$ended" ] && when="$began - $ended, seen ${reps}x"
-	row errors "${red}$(printf '%s' "$latest" | clip "$msgw")${off}"
+	# Which subsystem failed is the first thing you need and the row never said it,
+	# so a backup fault logged after a clean sync full-check read as a contradiction.
+	# Label only what is identifiable: a wrong scope is worse than none, so anything
+	# carrying neither marker gets no tag rather than a guess.
+	scope=''
+	if printf '%s' "$latest" | grep -qaE "sync\.|\.canary-|$(printf '%s' "$root" | sed 's/[][\.*^$/]/\\&/g')"; then
+		scope='sync   '
+	elif printf '%s' "$latest" | grep -qaE "/backup/|backup:|$HOME"; then
+		scope='backup '
+	fi
+	group errors "${dim}${scope}${off}${red}$(printf '%s' "$latest" | clip "$((msgw - ${#scope}))")${off}"
 	row '' "${dim}${when}${off}"
 
 	# A different error dominating by volume is its own symptom: that is what a

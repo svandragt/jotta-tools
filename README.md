@@ -1,7 +1,7 @@
 # jotta-canary
 
 Alerts your phone when a machine's Jottacloud sync folder stops moving, plus
-[`sync-buddy`](#sync-buddy) for checking the state of sync by hand.
+[`jotta-buddy`](#jotta-buddy) for checking the state of sync by hand.
 
 Jotta sync wedges silently. `jotta-cli status` keeps reporting `listening to
 events` or `Up to date` while the sync loop retries the same fatal error, and
@@ -20,7 +20,7 @@ get a push notification.
 - `curl`, `jq`, `make` and systemd user services.
 
 Examples below write `~/me/sync` for the sync folder. Substitute your own if it
-differs; `sync-buddy` prints it on the `local` row, or ask jottad directly with
+differs; `jotta-buddy` prints it on the `local` row, or ask jottad directly with
 `jotta-cli status --json | jq -r .Sync.RootPath`.
 - `~/.local/bin` on your `PATH`. That is where the script installs.
 - An [ntfy](https://ntfy.sh) topic, subscribed to on your phone.
@@ -94,37 +94,46 @@ default. Raise it if a machine has a slow uplink or a large backlog. The
 service unit allows 20 minutes, so raise `TimeoutStartSec` too if you go above
 that.
 
-## sync-buddy
+## jotta-buddy
 
-`make install` also puts `sync-buddy` on your `PATH`. Where the canary runs
+`make install` also puts `jotta-buddy` on your `PATH`. Where the canary runs
 unattended and alerts you about uploads that never land, this one is for the
 moment you are already suspicious and want to look:
 
 ```
-jotta sync buddy Mon 18:51:04
+jotta buddy Mon 18:51:04
 
   daemon    running  pid 4321, up 06:24
   query     responsive
-  state     Idle 12s ago
-  verdict   clean  full-check completed 18:46:18
-  local     91234 files  40.2 GiB  /home/user/me/sync
-  remote    98765 files  71.5 GiB
-  transfer  idle
-  not local 7531 files  31.3 GiB
+
+  sync      clean  full-check completed 18:46:18
+    state     Idle 12s ago
+    local     91234 files  40.2 GiB  /home/user/me/sync
+    remote    98765 files  71.5 GiB
+    not local 7531 files  31.3 GiB
+    transfer  idle
+
+  backup    clean  scan completed 18:44:02 in 21s
+    files     1050041 files  200.4 GiB  /home/user
 
   recent
     18:46:18  * sync full-check completed in 1m32.404821291s
     18:46:19  sync.state [Idle] => [Evaluating] after 501.615159ms
 ```
 
+Sync and backup get a verdict each because they fail differently. Sync stops its
+event loop and goes quiet, so it fails loudly and you notice. Backup keeps
+cycling whatever happens, so it fails silently — it can skip a subtree for months
+without a word. The one that hides its failures is the one that needs the row.
+
 Run it with no arguments and it refreshes every 30 seconds, because watching a
 stall clear is the usual reason you opened it. To print one report and exit:
 
 ```sh
-sync-buddy --once
+jotta-buddy --once
 ```
 
-Set `SYNC_BUDDY_INTERVAL` to change the refresh, in seconds. The refresh is
+Set `JOTTA_BUDDY_INTERVAL` to change the refresh, in seconds. The refresh is
 `watch(1)`, and it only kicks in when output is a terminal, so a script or a
 timer gets a single report and a usable exit code without asking for `--once`.
 
@@ -132,19 +141,28 @@ The `not local` row counts files the server holds and this machine does not. It
 is not a backlog draining: a folder deleted locally but kept remotely sits there
 for good, while sync still reports itself up to date.
 
-Read the `verdict` row first. Every other row reports what jottad is *doing*, and
-none of them says whether it worked — so a healthy machine and a broken one both
-show a list of errors, and there is no way to tell them apart at a glance. There
-are always some errors in a few hours of log. A completed full-check is the only
-positive evidence sync works:
+Read the two verdicts first. Every indented row reports what jottad is *doing*,
+and none of them says whether it worked — so a healthy machine and a broken one
+both show a list of errors, and there is no telling them apart at a glance. There
+are always some errors in a few hours of log. A completed pass is the only
+positive evidence:
 
 ```
-  verdict   clean  full-check completed 18:46:18
-  verdict   event loop stopped 21:45:42, no clean pass since
+  sync      clean  full-check completed 18:46:18
+  sync      event loop stopped 21:45:42, no clean pass since
+  backup    clean  scan completed 18:44:02 in 21s
+  backup    12 files failed  4.2 MiB last scan
 ```
 
-The second form means a stop is more recent than the last completion, so nothing
-has synced since. That is the row to act on, whatever the `errors` row says.
+The second form of each is the one to act on, whatever the `errors` row says: a
+sync stop more recent than the last completion means nothing has synced since,
+and a non-zero backup failure count is the only number that distinguishes files
+left behind from files merely queued.
+
+The `errors` row tags which subsystem a fault came from. Without that, a backup
+fault logged after a clean sync pass reads as the report contradicting itself —
+which is what it used to do. Anything carrying no identifying marker gets no tag
+rather than a guess.
 
 It adds the two things `jotta-cli status` will not tell you. The first is a
 different wedge from the one the canary catches: jottad accepts the connection
@@ -161,7 +179,7 @@ The second is errors, because `jotta-cli` does not expose them at all. There is
 no error field in `status --json`, `status -v` lists file errors only while
 they are current, and `list uploaderrors` demands an `--uploadid` you can only
 get from a transfer that is still running. The service log is the only place a
-failure survives, so that is where `sync-buddy` reads.
+failure survives, so that is where `jotta-buddy` reads.
 
 A worked example, and the reason the `errors` row leads with the fault that
 started most recently rather than the most frequent one. Two files whose names
@@ -179,7 +197,7 @@ after that point, including files that have nothing to do with the collision:
 `after-collision.txt` never reaches the server. Throughout, `jotta-cli status`
 reports `Checking for changes...` and `Mode: listening to events`.
 
-`sync-buddy` names it, and the path with it:
+`jotta-buddy` names it, and the path with it:
 
 ```
   state     Evaluating 0s ago
@@ -236,9 +254,9 @@ things.
 Exit codes are `0` healthy, `1` daemon not running, `2` wedged, so it can gate
 a script.
 
-`SYNC_BUDDY_DEADLINE` (default 15) is how many seconds to wait for jottad
-before calling it wedged. `SYNC_BUDDY_SINCE` (default `-30min`) is how far back
-to read the journal for activity. `SYNC_BUDDY_ERRSINCE` (default `-24h`) is the
+`JOTTA_BUDDY_DEADLINE` (default 15) is how many seconds to wait for jottad
+before calling it wedged. `JOTTA_BUDDY_SINCE` (default `-30min`) is how far back
+to read the journal for activity. `JOTTA_BUDDY_ERRSINCE` (default `-24h`) is the
 window for errors, which is wider on purpose: a loop that started this morning
 is still why nothing is moving now.
 

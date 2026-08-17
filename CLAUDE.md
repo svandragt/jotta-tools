@@ -2,7 +2,7 @@
 
 Two tools for one problem: Jottacloud sync stops and says nothing.
 `jotta-canary` runs on a timer and alerts when uploads stop landing.
-`sync-buddy` is the by-hand view of what jottad is doing right now.
+`jotta-buddy` is the by-hand view of what jottad is doing right now.
 
 ## Conventions
 
@@ -11,14 +11,14 @@ Two tools for one problem: Jottacloud sync stops and says nothing.
   machines `~/bin` is a symlink into `~/me/sync`, which turns installing into
   publishing to every host.
 - `jotta-canary` installs as a copy: the timer runs it unattended and must not
-  follow a working tree. `sync-buddy` installs as a symlink: it is read by hand
+  follow a working tree. `jotta-buddy` installs as a symlink: it is read by hand
   and edits should take effect immediately.
 - Non-trivial logic leaves one runnable check behind. The wedge branch was
   verified by putting a hanging stub `jotta-cli` on `PATH`, not by assuming.
 
 ## Handling a new jottad error
 
-When sync breaks in a way `sync-buddy` does not already name, follow this.
+When sync breaks in a way `jotta-buddy` does not already name, follow this.
 
 **Do not add a matcher for one message.** A specific matcher only ever catches
 the fault you already survived. The `errors` row exists to surface faults
@@ -51,13 +51,15 @@ the only durable record.
 4. **Reproduce it deliberately** if you can. A fault you can trigger is a fault
    you can verify a fix against. Clean up after, and confirm sync recovers.
 
-5. **Work out why `sync-buddy` missed it.** In order of what has actually gone
+5. **Work out why `jotta-buddy` missed it.** In order of what has actually gone
    wrong before:
    - the include pattern did not match — note that `sync.event.processing.err:`
      does not contain the string `error`;
-   - the line matched but lost the ranking — the row leads with the *newest*
-     fault, longest line in that burst, because a fault that logs once and
-     stops matters more than a warning repeating all day;
+   - the line matched but lost the ranking — the row leads with the fault that
+     *started* most recently, longest line in that burst, because a fault that
+     logs once and stops matters more than a warning repeating all day. Ranking
+     by newest *line* was the earlier bug: a fault that retries forever is newest
+     again every time it fires, so it held the row and nothing new could get in;
    - noise outranked it — lines logged after every real error, such as
      `upload-diagnostics` and `error-reporting`, are excluded for this reason.
 

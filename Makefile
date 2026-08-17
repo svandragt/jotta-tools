@@ -12,11 +12,11 @@ install: $(TOPIC_FILE)
 	install -D -m 644 jotta-canary.service jotta-canary.timer -t $(UNITS)
 	systemctl --user daemon-reload
 	systemctl --user enable --now jotta-canary.timer
-	@# Symlinked, not copied: sync-buddy is read by hand, so edits in the clone
+	@# Symlinked, not copied: jotta-buddy is read by hand, so edits in the clone
 	@# should take effect without reinstalling. The timer runs jotta-canary
 	@# unattended, which is why that one is a copy the clone cannot change.
 	mkdir -p $(BIN)
-	ln -sfn $(CURDIR)/sync-buddy $(BIN)/sync-buddy
+	ln -sfn $(CURDIR)/jotta-buddy $(BIN)/jotta-buddy
 
 $(TOPIC_FILE):
 	@echo "Missing $@. Write your ntfy topic to it first:"
@@ -25,30 +25,34 @@ $(TOPIC_FILE):
 
 uninstall:
 	systemctl --user disable --now jotta-canary.timer
-	rm -f $(BIN)/jotta-canary $(BIN)/sync-buddy $(UNITS)/jotta-canary.service $(UNITS)/jotta-canary.timer
+	rm -f $(BIN)/jotta-canary $(BIN)/jotta-buddy $(UNITS)/jotta-canary.service $(UNITS)/jotta-canary.timer
 	systemctl --user daemon-reload
 
 test:
 	$(BIN)/jotta-canary --test
 
-# The refresh loop re-execs sync-buddy under watch(1), which has two ways to go
+# The refresh loop re-execs jotta-buddy under watch(1), which has two ways to go
 # wrong that reading the script will not show you: it can recurse, and it can eat
 # the exit code the canary gates on. script(1) fakes the terminal the branch turns on.
 check:
-	@sh -n sync-buddy && echo "ok  syntax"
-	@./sync-buddy --once >/dev/null && echo "ok  --once exits 0"
-	@test "$$(./sync-buddy | grep -c 'jotta sync buddy')" = 1 && \
+	@sh -n jotta-buddy && echo "ok  syntax"
+	@./jotta-buddy --once >/dev/null && echo "ok  --once exits 0"
+	@test "$$(./jotta-buddy | grep -c 'jotta buddy')" = 1 && \
 		echo "ok  no terminal, one report, no watch"
+	@# A broken jq path would drop a whole subsystem silently, and a missing verdict
+	@# reads as "nothing to report" rather than "never checked".
+	@test "$$(./jotta-buddy --once | grep -cE '^  (sync|backup) ')" = 2 && \
+		echo "ok  both subsystem verdicts present"
 	@# Generous timeouts: a pass costs a jotta-cli query and four journalctl reads,
 	@# so it takes seconds, and the point here is the branch, not the speed.
-	@timeout 30 script -qec "./sync-buddy --once" /dev/null 2>/dev/null | \
+	@timeout 30 script -qec "./jotta-buddy --once" /dev/null 2>/dev/null | \
 		grep -qa '\[2J' && { echo "FAIL  --once re-execs watch, so watch recurses"; exit 1; } || \
 		echo "ok  --once never re-execs"
-	@timeout 30 script -qec "./sync-buddy" /dev/null 2>/dev/null > /tmp/sync-buddy-check; \
+	@timeout 30 script -qec "./jotta-buddy" /dev/null 2>/dev/null > /tmp/jotta-buddy-check; \
 	for a in 1m:bold 2m:dim 31m:red 32m:green 33m:yellow; do \
-		grep -qa "\[0\?;\?$${a%%:*}" /tmp/sync-buddy-check || \
-			{ echo "FAIL  watch -c dropped $${a##*:}"; rm -f /tmp/sync-buddy-check; exit 1; }; \
-	done; rm -f /tmp/sync-buddy-check; echo "ok  watch keeps bold, dim and colour"
+		grep -qa "\[0\?;\?$${a%%:*}" /tmp/jotta-buddy-check || \
+			{ echo "FAIL  watch -c dropped $${a##*:}"; rm -f /tmp/jotta-buddy-check; exit 1; }; \
+	done; rm -f /tmp/jotta-buddy-check; echo "ok  watch keeps bold, dim and colour"
 
 status:
 	systemctl --user list-timers jotta-canary.timer
