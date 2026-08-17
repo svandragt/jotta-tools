@@ -22,7 +22,14 @@ get a push notification.
 
 Run this on each machine that syncs.
 
-1. Write your ntfy topic to the config file. Use the same topic on every
+1. Clone the repo:
+
+   ```sh
+   git clone https://github.com/svandragt/jotta-canary
+   cd jotta-canary
+   ```
+
+2. Write your ntfy topic to the config file. Use the same topic on every
    machine so all the alerts arrive in one place:
 
    ```sh
@@ -33,13 +40,13 @@ Run this on each machine that syncs.
    The topic is the only thing protecting your alerts, so it stays out of this
    repo. Pick an unguessable one.
 
-2. Install the script and the timer:
+3. Install the script and the timer:
 
    ```sh
    make install
    ```
 
-3. Confirm the alert path reaches your phone:
+4. Confirm the alert path reaches your phone:
 
    ```sh
    make test
