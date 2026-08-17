@@ -83,6 +83,7 @@ the only durable record.
 | `Allocate failed: DeadlineExceeded` | usually cycles, but stops the loop if it hits the canary upload | bursts 0-10s apart, 30s after a loop stop | transfers in that burst | cleared on its own |
 | `jottad.auth.err ... lookup id.jottacloud.com` | stops, restarts itself | 30s | everything until DNS answers | logs `=> RESOLVED` when it clears |
 | `Missing events. Restart sync please` | restarts itself | 20s | briefly | self-healing unless it wedges |
+| 421 `CorruptUploadOpenApiException` on a file under `Sync` | stops | 30s, then the retry lands | everything queued | self-healing, confirmed 2026-08-18 00:02:20 on `/.canary-<host>` |
 | `error mkdir /backup/<uuid>/...` + `INVALID_ARGUMENT code: 12` | keeps cycling | every backup scan, ~hourly | that subtree only, silently | rename the local directory. Do **not** delete it: see below |
 | `Error deleting /backup/<uuid>/...` + `InvalidArgument` | keeps cycling | every backup scan | nothing, but permanently | an ignore rule, because no local change can reach it |
 
@@ -137,5 +138,8 @@ error filter at all, which is what makes a stale exclusion here hard to notice) 
 firefox `cookies.sqlite-wal`, `sessionstore-backups/*.jsonlz4`, session JSON —
 the checksum stops matching what was allocated, and the retry lands. Common in
 the `/home/sander` backup set, so it dominates the 24h count without meaning
-anything; a 421 on a file under `Sync` is not the same thing · a line ending
+anything. A 421 on a file under `Sync` is **not** the same thing: it stops the
+event loop, and the file it names is usually `/.canary-<host>` simply because the
+canary is the only writer in an otherwise idle sync folder, so it is the upload in
+flight when a transient server error arrives. Do not "fix" the canary for it · a line ending
 `=> RESOLVED`, which is jottad clearing the error it quotes.

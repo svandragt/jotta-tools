@@ -110,6 +110,88 @@ errlog=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager -o short-iso
 	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events|full-check|sync\.state|backup: full scan' || true)
 recentlog=$(journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null || true)
 
+# The stuck modes worth catching all look the same in the log: one error, over
+# and over. Matching a specific message would only catch the fault already seen
+# once, so count repeats instead and let whatever repeats most name itself.
+# RESOLVED lines are dropped because they repeat the error text they clear, which
+# makes them the longest line in the burst and so the one longest-wins picks.
+# "context canceled" goes the same way: it means something else stopped the
+# operation -- a restart, a superseded scan -- so it names the consequence and
+# never the cause, while looking like the newest fault. DeadlineExceeded, which is
+# a real timeout, spells itself differently and stays.
+# An empty errlog would survive printf as one blank line and fake a fault, hence
+# the guard rather than a bare grep.
+errs=''
+[ -n "$errlog" ] && errs=$(printf '%s\n' "$errlog" |
+	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)|sync\.state \[|backup: full scan' || true)
+
+# Keep the timestamp, drop the log prefix, then collapse ids, hashes and durations
+# so retries of one fault group together. Leaves TAB-separated "timestamp<TAB>message".
+norm='s/^([^ ]+) [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1\t/
+      s/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/UUID/g
+      s/[0-9a-f]{16,}/ID/g
+      s/[0-9]+\.[0-9]+[munµ]?s/DUR/g
+      s/\[[A-Za-z0-9_-]{8,}\]/[ID]/g'
+
+# Split the errors by subsystem, and rank inside each. One shared list ranked
+# globally meant backup could hold the only row on offer: it is far noisier, so a
+# newer backup fault buried the sync fault that had actually stopped sync, exactly
+# when the sync verdict had gone red and you needed the lead. Sync is matched first
+# because the backup root is the whole home directory and contains the sync folder.
+syncpat="sync\.|\.canary-|$(printf '%s' "$root" | sed 's/[][\.*^$/]/\\&/g')"
+bkpat="/backup/|backup:|$HOME"
+syncerrs=''; bkerrs=''; oerrs=''
+if [ -n "$errs" ]; then
+	syncerrs=$(printf '%s\n' "$errs" | grep -aE "$syncpat" || true)
+	rest=$(printf '%s\n' "$errs" | grep -avE "$syncpat" || true)
+	[ -n "$rest" ] && {
+		bkerrs=$(printf '%s\n' "$rest" | grep -aE "$bkpat" || true)
+		oerrs=$(printf '%s\n' "$rest" | grep -avE "$bkpat" || true)
+	}
+fi
+
+# Rank one subsystem's errors and print them under its verdict. Leads with the
+# fault that STARTED most recently: ranking by newest line let a fault that retries
+# forever hold the row for good, since it is newest again every time it fires, so
+# nothing new could get in. First-seen demotes a chronic fault as soon as anything
+# else appears, while a fault that logs once and stops -- a case collision -- still
+# leads, because it only just began.
+#
+# ponytail: one fault logs a burst of lines in the same second, and the longest of
+# them is the one carrying the offending path, so length breaks the tie.
+# Longest-wins is a heuristic, not a parser; if jottad ever pads its short lines it
+# picks wrong, and the fix is to match per-message formats instead.
+faults() {
+	[ -n "$1" ] || return 0
+	_p=$(printf '%s\n' "$1" | sed -E "$norm" | awk -F'\t' '
+		{ if (!($2 in first)) first[$2] = $1; last[$2] = $1; n[$2]++ }
+		END { for (m in first) printf "%s\t%s\t%d\t%d\t%s\n",
+			first[m], last[m], n[m], length(m), m }' |
+		sort -k1,1r -k4,4nr | head -1)
+	_msg=$(printf '%s' "$_p" | cut -f5)
+	_reps=$(printf '%s' "$_p" | cut -f3)
+	_a=$(clock "$(printf '%s' "$_p" | cut -f1)")
+	_b=$(clock "$(printf '%s' "$_p" | cut -f2)")
+
+	# Clock times, not ages: an age means guessing which day a bare time belongs to,
+	# and these read fine against the header. Both ends matter -- one fault at 23:05
+	# is news, the same fault hourly since 07:21 is furniture, and only the pair says
+	# which this is.
+	_when="at $_a"
+	[ "$_a" != "$_b" ] && _when="$_a - $_b, seen ${_reps}x"
+	sub error "${red}$(printf '%s' "$_msg" | clip "$((msgw - 2))")${off}"
+	sub '' "${dim}${_when}${off}"
+
+	# A different error dominating by volume is its own symptom: that is what a retry
+	# loop looks like, so name it too when it is not the one above.
+	_top=$(printf '%s\n' "$1" | sed -E "$norm" | cut -f2- | sort | uniq -c | sort -rn | head -1)
+	_n=$(printf '%s' "$_top" | awk '{print $1}')
+	_tmsg=$(printf '%s' "$_top" | sed -E 's/^ *[0-9]+ +//')
+	if [ "$_n" -ge 5 ] && [ "$_tmsg" != "$_msg" ]; then
+		sub '' "${yellow}${_n}x${off} ${dim}$(printf '%s' "$_tmsg" | clip "$((msgw - 8))")${off}"
+	fi
+}
+
 # The numeric SyncState has no published mapping; the journal spells the name out.
 last=$(printf '%s\n' "$errlog" | grep -aE 'sync\.state \[' | tail -1)
 state=$(printf '%s' "$last" | sed -n 's/.*=> \[\([^]]*\)\].*/\1/p')
@@ -165,6 +247,7 @@ if [ "$up" -gt 0 ] || [ "$dl" -gt 0 ]; then
 else
 	sub transfer "${dim}idle${off}"
 fi
+faults "$syncerrs"
 
 # Backup gets the same treatment, and needs it more: it never stops its loop, so
 # nothing about it looks wrong until you total up what never arrived. The scan line
@@ -199,84 +282,18 @@ elif [ "$bkroots" -gt 1 ]; then
 		[ -n "$p" ] && sub '' "${dim}$p${off}"
 	done
 fi
+faults "$bkerrs"
 
-# The stuck modes worth catching all look the same in the log: one error, over
-# and over. Matching a specific message would only catch the fault already seen
-# once, so count repeats instead and let whatever repeats most name itself.
-# RESOLVED lines are dropped because they repeat the error text they clear, which
-# makes them the longest line in the burst and so the one longest-wins picks.
-# "context canceled" goes the same way: it means something else stopped the
-# operation -- a restart, a superseded scan -- so it names the consequence and
-# never the cause, while looking like the newest fault. DeadlineExceeded, which is
-# a real timeout, spells itself differently and stays.
-# An empty errlog would survive printf as one blank line and fake a fault, hence
-# the guard rather than a bare grep.
-errs=''
-[ -n "$errlog" ] && errs=$(printf '%s\n' "$errlog" |
-	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)|sync\.state \[|backup: full scan' || true)
+# Anything carrying neither a sync nor a backup marker cannot be attributed, and a
+# guessed subsystem is worse than none, so it gets its own section rather than being
+# filed under whichever verdict happened to be nearby.
+if [ -n "$oerrs" ]; then
+	group errors "${dim}unattributed${off}"
+	faults "$oerrs"
+fi
 
 if [ -n "$errs" ]; then
-	# Keep the timestamp, drop the log prefix, then collapse ids, hashes and
-	# durations so retries of one fault group together. Leaves TAB-separated
-	# "timestamp<TAB>message" for the grouping below.
-	norm='s/^([^ ]+) [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1\t/
-	      s/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/UUID/g
-	      s/[0-9a-f]{16,}/ID/g
-	      s/[0-9]+\.[0-9]+[munµ]?s/DUR/g
-	      s/\[[A-Za-z0-9_-]{8,}\]/[ID]/g'
-
-	# Lead with the fault that STARTED most recently, not the newest line and not
-	# the most frequent. Ranking by newest line lets a fault that retries forever
-	# hold the row for good: it is newest again every time it fires, so a genuinely
-	# new problem never gets in, and the row stops being worth reading. First-seen
-	# demotes a chronic fault the moment anything else appears, while a fault that
-	# logs once and stops -- a case collision -- still wins on the strength of
-	# having only just begun.
-	#
-	# ponytail: one fault logs a burst of lines in the same second, and the
-	# longest of them is the one carrying the offending path, so length breaks the
-	# tie. Longest-wins is a heuristic, not a parser; if jottad ever pads its short
-	# lines it picks wrong, and the fix is to match per-message formats instead.
-	pick=$(printf '%s\n' "$errs" | sed -E "$norm" | awk -F'\t' '
-		{ if (!($2 in first)) first[$2] = $1; last[$2] = $1; n[$2]++ }
-		END { for (m in first) printf "%s\t%s\t%d\t%d\t%s\n",
-			first[m], last[m], n[m], length(m), m }' |
-		sort -k1,1r -k4,4nr | head -1)
-
-	latest=$(printf '%s' "$pick" | cut -f5)
-	reps=$(printf '%s' "$pick" | cut -f3)
-	began=$(clock "$(printf '%s' "$pick" | cut -f1)")
-	ended=$(clock "$(printf '%s' "$pick" | cut -f2)")
-	total=$(printf '%s\n' "$errs" | wc -l | tr -d ' ')
-
-	# Clock times, not ages: the window is 24h, so an age means guessing which day
-	# a bare time belongs to, and these read fine against the header timestamp.
-	# Both ends matter -- one fault at 23:05 is news, the same fault every hour
-	# since 07:21 is furniture, and only the pair tells you which this is.
-	when="at $began"
-	[ "$began" != "$ended" ] && when="$began - $ended, seen ${reps}x"
-	# Which subsystem failed is the first thing you need and the row never said it,
-	# so a backup fault logged after a clean sync full-check read as a contradiction.
-	# Label only what is identifiable: a wrong scope is worse than none, so anything
-	# carrying neither marker gets no tag rather than a guess.
-	scope=''
-	if printf '%s' "$latest" | grep -qaE "sync\.|\.canary-|$(printf '%s' "$root" | sed 's/[][\.*^$/]/\\&/g')"; then
-		scope='sync   '
-	elif printf '%s' "$latest" | grep -qaE "/backup/|backup:|$HOME"; then
-		scope='backup '
-	fi
-	group errors "${dim}${scope}${off}${red}$(printf '%s' "$latest" | clip "$((msgw - ${#scope}))")${off}"
-	row '' "${dim}${when}${off}"
-
-	# A different error dominating by volume is its own symptom: that is what a
-	# retry loop looks like, so name it too when it is not the one above.
-	top=$(printf '%s\n' "$errs" | sed -E "$norm" | cut -f2- | sort | uniq -c | sort -rn | head -1)
-	n=$(printf '%s' "$top" | awk '{print $1}')
-	tmsg=$(printf '%s' "$top" | sed -E 's/^ *[0-9]+ +//')
-	if [ "$n" -ge 5 ] && [ "$tmsg" != "$latest" ]; then
-		row '' "${yellow}${n}x${off} ${dim}$(printf '%s' "$tmsg" | clip "$((msgw - 6))")${off}"
-	fi
-	row '' "${dim}$total error lines in ${ERRSINCE#-}${off}"
+	printf '\n  %s%s error lines in %s%s\n' "$dim" "$(printf '%s\n' "$errs" | wc -l | tr -d ' ')" "${ERRSINCE#-}" "$off"
 fi
 
 printf '\n  %srecent%s\n' "$bold" "$off"

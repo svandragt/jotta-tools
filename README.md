@@ -159,10 +159,30 @@ sync stop more recent than the last completion means nothing has synced since,
 and a non-zero backup failure count is the only number that distinguishes files
 left behind from files merely queued.
 
-The `errors` row tags which subsystem a fault came from. Without that, a backup
-fault logged after a clean sync pass reads as the report contradicting itself —
-which is what it used to do. Anything carrying no identifying marker gets no tag
-rather than a guess.
+Errors are ranked and reported inside each subsystem, under its own verdict, so a
+red verdict always comes with a lead:
+
+```
+  sync      event loop stopped 00:02:20, no clean pass since
+    error     unable to perform local actions upload group failed: sync.uploadF
+              at 00:02:20
+
+  backup    clean  scan completed 23:22:23 in 20s
+    error     Error deleting /backup/UUID/sander/.config/Slack/IndexedDB/https_
+              at 23:23:25
+              5x Error deleting /backup/UUID/sander/.config/mozilla/firefox/
+```
+
+One shared list ranked across both put backup in a position to hold the only row
+going. Backup is far noisier, so a newer backup fault buried the sync fault that
+had actually stopped sync — leaving a red verdict and nothing to act on. Sync is
+matched first when classifying, because the backup root is the whole home
+directory and contains the sync folder inside it.
+
+A fault carrying neither marker goes under `errors  unattributed` rather than
+being filed under whichever verdict happened to be nearby. Some continuation lines
+land there, since jottad logs the failure class and the offending path on separate
+lines and only one of them carries the path.
 
 It adds the two things `jotta-cli status` will not tell you. The first is a
 different wedge from the one the canary catches: jottad accepts the connection
