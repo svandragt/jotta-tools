@@ -1,0 +1,29 @@
+BIN := $(HOME)/bin
+UNITS := $(HOME)/.config/systemd/user
+TOPIC_FILE := $(HOME)/.config/jotta-canary/topic
+
+.PHONY: install uninstall test status
+
+install: $(TOPIC_FILE)
+	install -D -m 755 jotta-canary $(BIN)/jotta-canary
+	install -D -m 644 jotta-canary.service jotta-canary.timer -t $(UNITS)
+	systemctl --user daemon-reload
+	systemctl --user enable --now jotta-canary.timer
+
+$(TOPIC_FILE):
+	@echo "Missing $@. Write your ntfy topic to it first:"
+	@echo "  mkdir -p $(dir $@) && echo YOUR-TOPIC > $@"
+	@exit 1
+
+uninstall:
+	systemctl --user disable --now jotta-canary.timer
+	rm -f $(BIN)/jotta-canary $(UNITS)/jotta-canary.service $(UNITS)/jotta-canary.timer
+	systemctl --user daemon-reload
+
+test:
+	$(BIN)/jotta-canary --test
+
+status:
+	systemctl --user list-timers jotta-canary.timer
+	@# systemctl status exits 3 when the unit is simply not running.
+	-systemctl --user status jotta-canary.service --no-pager

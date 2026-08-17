@@ -1,0 +1,49 @@
+#!/bin/sh
+# Alerts when the Jottacloud sync folder stops moving.
+#
+# Sync wedges silently: `jotta-cli status` keeps printing "listening to
+# events" (or "Up to date") while the sync loop retries the same fatal error
+# forever, and `jotta-cli sync log` only records downloads. Neither is a
+# health signal, so this checks end to end: write locally, then read the
+# checksum back from the server.
+#
+# The canary is per-host. A shared one has two writers and syncs into a
+# conflicted copy.
+set -eu
+
+# The ntfy topic is all that protects the alerts, so it stays out of this repo.
+TOPIC=$(cat "$HOME/.config/jotta-canary/topic")
+CANARY="$HOME/me/sync/.canary-$(hostname)"
+REMOTE_CANARY="Sync/.canary-$(hostname)"
+UPLOAD_GRACE_SECONDS=600
+
+notify() {
+	curl -fsS \
+		-H "Title: Jotta sync stuck on $(hostname)" \
+		-H "Priority: high" \
+		-d "$1" \
+		"https://ntfy.sh/$TOPIC" >/dev/null
+}
+
+if [ "${1:-}" = "--test" ]; then
+	notify "Test alert. Canary is installed and can reach your phone."
+	echo "test alert sent"
+	exit 0
+fi
+
+date +%s >"$CANARY" || {
+	notify "Cannot write the canary $CANARY."
+	exit 1
+}
+sleep "$UPLOAD_GRACE_SECONDS"
+
+want=$(md5sum "$CANARY" | cut -d' ' -f1)
+# Columns: Id Size Checksum "Last Modified"; newest revision is the highest Id.
+got=$(jotta-cli ls "$REMOTE_CANARY" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $1+0 > id {id=$1; c=$3} END{print c}' || true)
+
+if [ "$want" = "$got" ]; then
+	exit 0
+fi
+
+notify "Canary not uploaded in $((UPLOAD_GRACE_SECONDS / 60)) min. Check: jotta-cli status"
+exit 1
