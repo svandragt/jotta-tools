@@ -16,6 +16,7 @@ get a push notification.
 
 - `jotta-cli`, logged in, with a sync folder at `~/me/sync`.
 - `curl`, `make` and systemd user services.
+- `~/.local/bin` on your `PATH`. That is where the script installs.
 - An [ntfy](https://ntfy.sh) topic, subscribed to on your phone.
 
 ## Install
@@ -45,6 +46,12 @@ Run this on each machine that syncs.
    ```sh
    make install
    ```
+
+   Install each machine from its own clone. Overriding `BIN` to a directory
+   inside the sync folder turns installing into publishing: every other machine
+   gets the script whether you meant it or not, and two machines installing
+   different revisions leave you with a conflicted copy. Watch for a `~/bin`
+   that is a symlink into the sync folder.
 
 4. Confirm the alert path reaches your phone:
 

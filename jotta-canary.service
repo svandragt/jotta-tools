@@ -3,6 +3,6 @@ Description=Check that Jottacloud sync is still moving
 
 [Service]
 Type=oneshot
-ExecStart=%h/bin/jotta-canary
+ExecStart=%h/.local/bin/jotta-canary
 # The canary waits UPLOAD_GRACE_SECONDS for the upload, so allow well over it.
 TimeoutStartSec=20min

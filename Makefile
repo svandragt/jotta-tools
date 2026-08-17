@@ -1,4 +1,7 @@
-BIN := $(HOME)/bin
+# Not ~/bin: that is a symlink into the synced folder on some machines, which
+# turns installing into publishing to every host. Keep ExecStart in the service
+# unit pointing at the same place if you change this.
+BIN := $(HOME)/.local/bin
 UNITS := $(HOME)/.config/systemd/user
 TOPIC_FILE := $(HOME)/.config/jotta-canary/topic
 
