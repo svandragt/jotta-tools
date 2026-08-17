@@ -115,17 +115,48 @@ a restart clears it:
 systemctl --user restart jottad
 ```
 
-The second is recent activity, read from the journal, because the state names
-(`Idle`, `Evaluating`, `Working`) only appear there. `SyncState` in the JSON is
-an integer with no published mapping, and it disappears from the output
-entirely when sync is idle.
+The second is errors, because `jotta-cli` does not expose them at all. There is
+no error field in `status --json`, `status -v` lists file errors only while
+they are current, and `list uploaderrors` demands an `--uploadid` you can only
+get from a transfer that is still running. The service log is the only place a
+failure survives, so that is where `sync-buddy` reads.
+
+A worked example, and the reason the `errors` row leads with the newest fault
+rather than the most frequent one. Two files whose names differ only in case
+sync fine on Linux and collide on the server:
+
+```sh
+echo one > ~/me/sync/casetest.txt
+echo two > ~/me/sync/CaseTest.txt
+echo three > ~/me/sync/after-collision.txt   # written afterwards
+```
+
+jottad stops the sync event loop on the collision and retries the same
+full-check every 90 seconds, failing the same way each time. Nothing uploads
+after that point, including files that have nothing to do with the collision:
+`after-collision.txt` never reaches the server. Throughout, `jotta-cli status`
+reports `Checking for changes...` and `Mode: listening to events`.
+
+The collision logs once and then goes quiet, while routine warnings keep
+accumulating, so ranking errors by frequency hides the one that actually
+stopped sync. Deleting either side of the pair clears it, and the backlog
+drains on the next retry.
+
+Recent activity is read from the journal too, because the state names (`Idle`,
+`Evaluating`, `Working`) only appear there. `SyncState` in the JSON is an
+integer with no published mapping, and it disappears from the output entirely
+when sync is idle. The `state` row shows the age of the last transition, since
+`Working` for eight seconds and `Working` for forty minutes mean opposite
+things.
 
 Exit codes are `0` healthy, `1` daemon not running, `2` wedged, so it can gate
 a script.
 
 `SYNC_BUDDY_DEADLINE` (default 15) is how many seconds to wait for jottad
 before calling it wedged. `SYNC_BUDDY_SINCE` (default `-30min`) is how far back
-to read the journal.
+to read the journal for activity. `SYNC_BUDDY_ERRSINCE` (default `-24h`) is the
+window for errors, which is wider on purpose: a loop that started this morning
+is still why nothing is moving now.
 
 It is symlinked rather than copied, so edits in the clone take effect straight
 away. Do not move it into the sync folder: `~/bin` is a symlink into the synced

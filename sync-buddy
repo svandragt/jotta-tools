@@ -7,6 +7,9 @@ set -u
 
 DEADLINE=${SYNC_BUDDY_DEADLINE:-15}
 SINCE=${SYNC_BUDDY_SINCE:--30min}
+# Errors outlive the activity window: a loop that started hours ago is still
+# the reason nothing moves now, so they get their own, wider one.
+ERRSINCE=${SYNC_BUDDY_ERRSINCE:--24h}
 
 bold=''; dim=''; red=''; green=''; yellow=''; off=''
 if [ -t 1 ]; then
@@ -47,12 +50,32 @@ eval "$(printf '%s' "$status" | jq -r '
 ')"
 
 # The numeric SyncState has no published mapping; the journal spells the name out.
-state=$(journalctl --user -u jottad --since "$SINCE" --no-pager 2>/dev/null |
-	sed -n 's/.*sync\.state \[[^]]*\] => \[\([^]]*\)\].*/\1/p' | tail -1)
+last=$(journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null |
+	grep -E 'sync\.state \[' | tail -1)
+state=$(printf '%s' "$last" | sed -n 's/.*=> \[\([^]]*\)\].*/\1/p')
+
+# The state name alone cannot tell you stuck from quiet: a wedged loop leaves
+# [Working] sitting there and a healthy one leaves [Idle]. The age of the last
+# transition is what separates them.
+age=''
+if [ -n "$last" ]; then
+	then_s=$(date -d "$(printf '%s' "$last" | cut -d' ' -f1)" +%s 2>/dev/null || echo 0)
+	[ "$then_s" -gt 0 ] && age=$(( $(date +%s) - then_s ))
+fi
+when=''
+[ -n "$age" ] && { [ "$age" -lt 90 ] && when="${age}s ago" || when="$((age / 60))m ago"; }
+
+# Evaluating and Working are transient. Stalling in one is the whole symptom.
+if [ -n "$age" ] && [ "$age" -gt 900 ] && [ -n "$state" ] && [ "$state" != Idle ]; then
+	shown="${yellow}$state for $((age / 60))m -- stalled?${off}"
+else
+	shown="${state:-unknown}${when:+ ${dim}${when}${off}}"
+fi
+
 extra=''
 [ "$on" = true ] || extra="$extra (sync disabled)"
 [ "$auto" = true ] || extra="$extra (manual)"
-row state "${state:-unknown}${dim}${extra}${off}"
+row state "${shown}${dim}${extra}${off}"
 row local "$lf files  $(iec "$lb")  ${dim}$root${off}"
 row remote "$rf files  $(iec "$rb")"
 
@@ -64,6 +87,59 @@ fi
 
 if [ "$rf" -gt "$lf" ]; then
 	row behind "$((rf - lf)) files  $(iec $((rb - lb)))"
+fi
+
+# jottad counts its own failures during a scan. Zero is the normal case and the
+# line is noise, but a non-zero count is the only number that says files are
+# being left behind rather than merely queued.
+scanerr=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager 2>/dev/null |
+	sed -n 's/.*errors\[\([0-9]*\) files \([0-9]*\) bytes\].*/\1 \2/p' | grep -v '^0 ' | tail -1)
+if [ -n "$scanerr" ]; then
+	row failed "${red}$(echo "$scanerr" | cut -d' ' -f1) files${off}  ${dim}$(iec "$(echo "$scanerr" | cut -d' ' -f2)") last scan${off}"
+fi
+
+# The stuck modes worth catching all look the same in the log: one error, over
+# and over. Matching a specific message would only catch the fault already seen
+# once, so count repeats instead and let whatever repeats most name itself.
+# Errors get a wider window than the activity tail below, because a retry loop
+# can be hours old and still be the reason nothing is moving.
+errs=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager 2>/dev/null |
+	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events' |
+	grep -avE 'errors\[0 files|not regular file|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting' || true)
+
+if [ -n "$errs" ]; then
+	# Collapse ids, hashes and durations so retries of one fault group together.
+	norm='s/^.*pid:[0-9]+ [0-9\/]+ [0-9:]+ //
+	      s/[0-9a-f]{16,}/ID/g
+	      s/[0-9]+\.[0-9]+[munµ]?s/DUR/g
+	      s/\[[A-Za-z0-9_-]{8,}\]/[ID]/g'
+
+	# Lead with the newest error, not the most frequent one. A case collision
+	# stops the event loop after logging once, so ranking by count buries the
+	# thing that actually broke sync under whatever merely repeats a lot.
+	#
+	# ponytail: one fault logs a burst of lines in the same second, and the
+	# longest of them is the one carrying the offending path. Longest-wins is a
+	# heuristic, not a parser; if jottad ever pads its short lines it picks
+	# wrong, and the fix is to match per-message formats instead.
+	ts=$(printf '%s\n' "$errs" | tail -1 | awk '{print $3}')
+	latest=$(printf '%s\n' "$errs" | awk -v t="$ts" '$3 == t' |
+		awk '{print length "\t" $0}' | sort -rn | head -1 | cut -f2- | sed -E "$norm")
+	reps=$(printf '%s\n' "$errs" | sed -E "$norm" | grep -cxF "$latest" || true)
+	total=$(printf '%s\n' "$errs" | wc -l | tr -d ' ')
+
+	row errors "${red}$(printf '%s' "$latest" | cut -c1-62)${off}"
+	[ "$reps" -gt 1 ] && row '' "${dim}seen ${reps}x${off}"
+
+	# A different error dominating by volume is its own symptom: that is what a
+	# retry loop looks like, so name it too when it is not the one above.
+	top=$(printf '%s\n' "$errs" | sed -E "$norm" | sort | uniq -c | sort -rn | head -1)
+	n=$(printf '%s' "$top" | awk '{print $1}')
+	tmsg=$(printf '%s' "$top" | sed -E 's/^ *[0-9]+ +//')
+	if [ "$n" -ge 5 ] && [ "$tmsg" != "$latest" ]; then
+		row '' "${yellow}${n}x${off} ${dim}$(printf '%s' "$tmsg" | cut -c1-56)${off}"
+	fi
+	row '' "${dim}$total error lines in ${ERRSINCE#-}${off}"
 fi
 
 printf '\n  %srecent%s\n' "$bold" "$off"
