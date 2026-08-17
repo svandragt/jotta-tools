@@ -82,14 +82,16 @@ eval "$(printf '%s' "$status" | jq -r '
 # three seconds and the 30 minute one about one, so re-reading either doubles it.
 # The wide window is filtered on the way in -- 24h is some 280k lines and 70MB, far
 # too much to hold, while the errors within it are a few thousand.
-# full-check lines ride along in the same capture: they are the only positive
-# evidence sync works, and pulling them here costs nothing.
+# full-check and sync.state lines ride along in the same capture: the first are the
+# only positive evidence sync works, and the second have to be found however long
+# ago sync last moved. Reading them from the 30 minute window left the state row
+# saying "unknown" on a perfectly healthy machine that had simply been quiet.
 errlog=$(journalctl --user -u jottad --since "$ERRSINCE" --no-pager -o short-iso 2>/dev/null |
-	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events|full-check' || true)
+	grep -aiE 'error|\.err[:. ]|failed|cannot|unable|refused|conflict|collision|missing events|full-check|sync\.state' || true)
 recentlog=$(journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null || true)
 
 # The numeric SyncState has no published mapping; the journal spells the name out.
-last=$(printf '%s' "$recentlog" | grep -E 'sync\.state \[' | tail -1)
+last=$(printf '%s\n' "$errlog" | grep -aE 'sync\.state \[' | tail -1)
 state=$(printf '%s' "$last" | sed -n 's/.*=> \[\([^]]*\)\].*/\1/p')
 
 # The state name alone cannot tell you stuck from quiet: a wedged loop leaves
@@ -166,7 +168,7 @@ fi
 # the guard rather than a bare grep.
 errs=''
 [ -n "$errlog" ] && errs=$(printf '%s\n' "$errlog" |
-	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)' || true)
+	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)|sync\.state \[' || true)
 
 if [ -n "$errs" ]; then
 	# Keep the timestamp, drop the log prefix, then collapse ids, hashes and
