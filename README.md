@@ -91,13 +91,13 @@ moment you are already suspicious and want to look:
 ```
 jotta sync buddy Mon 18:51:04
 
-  daemon    running  pid 612388, up 06:24
+  daemon    running  pid 4321, up 06:24
   query     responsive
-  state     Idle
-  local     142031 files  61.6 GiB  /home/sander/me/sync
-  remote    153199 files  109.9 GiB
+  state     Idle 12s ago
+  local     91234 files  40.2 GiB  /home/user/me/sync
+  remote    98765 files  71.5 GiB
   transfer  idle
-  behind    11168 files  48.3 GiB
+  behind    7531 files  31.3 GiB
 
   recent
     18:46:18  * sync full-check completed in 1m32.404821291s
@@ -136,6 +136,15 @@ full-check every 90 seconds, failing the same way each time. Nothing uploads
 after that point, including files that have nothing to do with the collision:
 `after-collision.txt` never reaches the server. Throughout, `jotta-cli status`
 reports `Checking for changes...` and `Mode: listening to events`.
+
+`sync-buddy` names it, and the path with it:
+
+```
+  state     Evaluating 0s ago
+  errors    Error syncing /casetest.txt already exists with different case
+            seen 2x
+            54 error lines in 24h
+```
 
 The collision logs once and then goes quiet, while routine warnings keep
 accumulating, so ranking errors by frequency hides the one that actually
