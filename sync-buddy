@@ -1,0 +1,75 @@
+#!/bin/sh
+# Jottacloud sync at a glance: is jottad alive, what state, and what has it done lately.
+# jotta-cli status already prints the totals; this adds the two things it does not:
+# a wedge check (jottad accepts the connection but never answers) and recent activity.
+
+set -u
+
+DEADLINE=${SYNC_BUDDY_DEADLINE:-15}
+SINCE=${SYNC_BUDDY_SINCE:--30min}
+
+bold=''; dim=''; red=''; green=''; yellow=''; off=''
+if [ -t 1 ]; then
+	bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); red=$(printf '\033[31m')
+	green=$(printf '\033[32m'); yellow=$(printf '\033[33m'); off=$(printf '\033[0m')
+fi
+
+iec() { awk -v b="${1:-0}" 'BEGIN{split("B KiB MiB GiB TiB",u," ");i=1;while(b>=1024&&i<5){b/=1024;i++}printf (i==1?"%d %s":"%.1f %s"),b,u[i]}'; }
+row() { printf '  %-9s %s\n' "$1" "$2"; }
+
+printf '%sjotta sync buddy%s %s%s%s\n\n' "$bold" "$off" "$dim" "$(date '+%a %H:%M:%S')" "$off"
+
+pid=$(systemctl --user show -P MainPID jottad 2>/dev/null)
+if [ -z "$pid" ] || [ "$pid" = 0 ]; then
+	row daemon "${red}not running${off}"
+	printf '\n  start it: %ssystemctl --user start jottad%s\n' "$bold" "$off"
+	exit 1
+fi
+row daemon "running  ${dim}pid $pid, up $(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')${off}"
+
+# jottad wedges by accepting the connection and never replying, so a timeout here is
+# the symptom that matters -- and the only cure found so far is a restart.
+status=$(timeout "$DEADLINE" jotta-cli status --json 2>/dev/null | sed -n '/^{/,$p')
+if [ -z "$status" ]; then
+	row query "${red}no answer within ${DEADLINE}s -- wedged${off}"
+	printf '\n  fix it: %ssystemctl --user restart jottad%s\n' "$bold" "$off"
+	exit 2
+fi
+row query "${green}responsive${off}"
+
+# Let jq emit whole labelled assignments: SyncState and SyncWorking vanish from the JSON
+# when idle, and shell field-splitting silently shifts every value left when one is missing.
+eval "$(printf '%s' "$status" | jq -r '
+	@sh "lf=\(.Sync.Count.Files//0) lb=\(.Sync.Count.Bytes//0)",
+	@sh "rf=\(.Sync.RemoteCount.Files//0) rb=\(.Sync.RemoteCount.Bytes//0)",
+	@sh "up=\(.State.Uploading|length) dl=\(.State.Downloading|length)",
+	@sh "on=\(.Sync.Enabled//false) auto=\(.Sync.Automatic//false) root=\(.Sync.RootPath//"?")"
+')"
+
+# The numeric SyncState has no published mapping; the journal spells the name out.
+state=$(journalctl --user -u jottad --since "$SINCE" --no-pager 2>/dev/null |
+	sed -n 's/.*sync\.state \[[^]]*\] => \[\([^]]*\)\].*/\1/p' | tail -1)
+extra=''
+[ "$on" = true ] || extra="$extra (sync disabled)"
+[ "$auto" = true ] || extra="$extra (manual)"
+row state "${state:-unknown}${dim}${extra}${off}"
+row local "$lf files  $(iec "$lb")  ${dim}$root${off}"
+row remote "$rf files  $(iec "$rb")"
+
+if [ "$up" -gt 0 ] || [ "$dl" -gt 0 ]; then
+	row transfer "${yellow}up $up  down $dl${off}"
+else
+	row transfer "${dim}idle${off}"
+fi
+
+if [ "$rf" -gt "$lf" ]; then
+	row behind "$((rf - lf)) files  $(iec $((rb - lb)))"
+fi
+
+printf '\n  %srecent%s\n' "$bold" "$off"
+journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso 2>/dev/null |
+	grep -E 'sync\.state|full-check|sync\.error|sync\.full\.error|Missing events|backup: full scan|queue for' |
+	tail -8 |
+	sed -E 's/^[0-9-]+T([0-9:]+)[^ ]* [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1  /
+	        s/ as [0-9a-f]{24}.*//' |
+	sed "s/^/    ${dim}/; s/\$/${off}/"

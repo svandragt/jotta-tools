@@ -12,6 +12,11 @@ install: $(TOPIC_FILE)
 	install -D -m 644 jotta-canary.service jotta-canary.timer -t $(UNITS)
 	systemctl --user daemon-reload
 	systemctl --user enable --now jotta-canary.timer
+	@# Symlinked, not copied: sync-buddy is read by hand, so edits in the clone
+	@# should take effect without reinstalling. The timer runs jotta-canary
+	@# unattended, which is why that one is a copy the clone cannot change.
+	mkdir -p $(BIN)
+	ln -sfn $(CURDIR)/sync-buddy $(BIN)/sync-buddy
 
 $(TOPIC_FILE):
 	@echo "Missing $@. Write your ntfy topic to it first:"
@@ -20,7 +25,7 @@ $(TOPIC_FILE):
 
 uninstall:
 	systemctl --user disable --now jotta-canary.timer
-	rm -f $(BIN)/jotta-canary $(UNITS)/jotta-canary.service $(UNITS)/jotta-canary.timer
+	rm -f $(BIN)/jotta-canary $(BIN)/sync-buddy $(UNITS)/jotta-canary.service $(UNITS)/jotta-canary.timer
 	systemctl --user daemon-reload
 
 test:
