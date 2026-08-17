@@ -13,9 +13,8 @@ set -eu
 
 # The ntfy topic is all that protects the alerts, so it stays out of this repo.
 TOPIC=$(cat "$HOME/.config/jotta-canary/topic")
-CANARY="$HOME/me/sync/.canary-$(hostname)"
-REMOTE_CANARY="Sync/.canary-$(hostname)"
 UPLOAD_GRACE_SECONDS=600
+QUERY_DEADLINE=30
 
 notify() {
 	curl -fsS \
@@ -30,6 +29,20 @@ if [ "${1:-}" = "--test" ]; then
 	echo "test alert sent"
 	exit 0
 fi
+
+# Ask jottad where the sync folder is rather than assuming ~/me/sync. A wrong
+# guess makes the canary watch a directory nothing syncs, which passes forever.
+# The query doubles as a liveness check: jottad wedges by accepting the
+# connection and never replying, and that deserves an alert of its own.
+status=$(timeout "$QUERY_DEADLINE" jotta-cli status --json 2>/dev/null | sed -n '/^{/,$p')
+SYNC_ROOT=$(printf '%s' "$status" | jq -r '.Sync.RootPath // empty')
+if [ -z "$SYNC_ROOT" ]; then
+	notify "jottad did not answer within ${QUERY_DEADLINE}s. Try: systemctl --user restart jottad"
+	exit 1
+fi
+
+CANARY="$SYNC_ROOT/.canary-$(hostname)"
+REMOTE_CANARY="Sync/.canary-$(hostname)"
 
 date +%s >"$CANARY" || {
 	notify "Cannot write the canary $CANARY."

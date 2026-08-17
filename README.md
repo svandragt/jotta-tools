@@ -15,8 +15,13 @@ get a push notification.
 
 ## What you need
 
-- `jotta-cli`, logged in, with a sync folder at `~/me/sync`.
-- `curl`, `make` and systemd user services.
+- `jotta-cli`, logged in, with sync enabled. The folder can be anywhere; both
+  scripts ask jottad where it is.
+- `curl`, `jq`, `make` and systemd user services.
+
+Examples below write `~/me/sync` for the sync folder. Substitute your own if it
+differs; `sync-buddy` prints it on the `local` row, or ask jottad directly with
+`jotta-cli status --json | jq -r .Sync.RootPath`.
 - `~/.local/bin` on your `PATH`. That is where the script installs.
 - An [ntfy](https://ntfy.sh) topic, subscribed to on your phone.
 
@@ -68,11 +73,18 @@ make status
 
 ## How it works
 
-`jotta-canary` writes the current Unix time to `~/me/sync/.canary-$(hostname)`,
-sleeps for the upload grace period, then reads the newest revision's checksum
-from `jotta-cli ls Sync/.canary-$(hostname)`. A match means sync is alive. A
-mismatch, or a missing remote file, sends the alert and exits non-zero, so the
-failure also shows up in `systemctl --user status jotta-canary.service`.
+`jotta-canary` asks jottad for the sync folder (`.Sync.RootPath` from
+`jotta-cli status --json`), writes the current Unix time to
+`<root>/.canary-$(hostname)`, sleeps for the upload grace period, then reads
+the newest revision's checksum from `jotta-cli ls Sync/.canary-$(hostname)`. A
+match means sync is alive. A mismatch, or a missing remote file, sends the
+alert and exits non-zero, so the failure also shows up in
+`systemctl --user status jotta-canary.service`.
+
+Asking for the path rather than assuming one is what stops the canary watching
+a directory nothing syncs, which would pass forever. The same query doubles as
+a liveness check: if jottad accepts the connection but never replies, the
+canary alerts immediately instead of waiting out the grace period.
 
 The canary is per host. A single shared canary file has as many writers as you
 have machines, and Jotta turns that into conflicted copies.
