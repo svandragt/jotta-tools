@@ -25,6 +25,22 @@ the fault you already survived. The `errors` row exists to surface faults
 nobody has seen yet, so a change is worth making only if it would have caught
 this one *without knowing its text*.
 
+**Fields that look right and are not.** `status --json` has several, all found the
+same way, by checking them while something was actually happening:
+
+- `.State.Uploading` and `.State.Downloading` stay empty objects with thousands of
+  files in flight. In-flight figures live in `.Sync.WorkingProgress`, which is
+  absent when idle. A row keyed on the former reads `idle` through an 11 GiB upload.
+- `.Backup...Backups[].Uploading` reports a *delta*, and goes negative when nothing
+  is happening. Only a positive count means anything.
+- `.Backup...History` lags by hours. It sat on a 16:07 scan while the log showed one
+  from 23:22, so a backup verdict has to come from the log.
+- `.Backup...Count` reports a partial total mid-recount. It was seen at 69872 files
+  and 3.1 GiB when the real figure was 1057950 and 211.8 GiB, correcting itself
+  within a minute. Do not treat a single sample as authoritative.
+- `.Sync.RemoteCount` is zero until jottad has listed the server tree, so a fresh
+  daemon reports an empty account rather than an unknown one.
+
 **Do not trust `jotta-cli` for any of it.** It has no error surface:
 `status --json` has no error field, `status -v` lists file errors only while
 they are current, and `list uploaderrors` requires an `--uploadid` that exists
