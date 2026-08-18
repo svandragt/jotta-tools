@@ -143,6 +143,11 @@ The first command must report `did not match`. `jotta-cli ignores rem` undoes it
 ### Looks like signal, is not
 
 `errors[0 files 0 bytes]` in scan lines (only non-zero matters) ·
+`localdb.found <checksum> in file <path>, copied to <root>/.jottaclouddownload/<id>`
+(jottad reusing a local file with a matching checksum instead of downloading it, so
+purely informational, and about 2400 lines every 4 hours. Only the ones whose path
+happens to contain `error` — `ErrorRule.php` was the first — reach the filter, and one
+of those took the top sync slot) ·
 `Ignored <path> : unsupported file type` (symlinks, intended, and about 130k lines
 every 4 hours — jottad used to word this `not regular file`, so match both. Only
 the ones whose *path* contains `error`, such as `libgpg-error.so.0`, reach the

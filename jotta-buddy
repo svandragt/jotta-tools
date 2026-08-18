@@ -137,7 +137,7 @@ recentlog=$(journalctl --user -u jottad --since "$SINCE" --no-pager -o short-iso
 # the guard rather than a bare grep.
 errs=''
 [ -n "$errlog" ] && errs=$(printf '%s\n' "$errlog" |
-	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)|sync\.state \[|backup: full scan' || true)
+	grep -avE 'errors\[0 files|not regular file|unsupported file type|PhotoFailed|checking for new versions|upload-diagnostics|error-reporting|=> RESOLVED|context canceled|full-check (started|completed)|sync\.state \[|backup: full scan|localdb\.found' || true)
 
 # Keep the timestamp, drop the log prefix, then collapse ids, hashes and durations
 # so retries of one fault group together. Leaves TAB-separated "timestamp<TAB>message".
