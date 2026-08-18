@@ -326,10 +326,17 @@ if [ -n "$errs" ]; then
 	printf '\n  %s%s error lines in %s%s\n' "$dim" "$(printf '%s\n' "$errs" | wc -l | tr -d ' ')" "${ERRSINCE#-}" "$off"
 fi
 
-printf '\n  %srecent%s\n' "$bold" "$off"
-printf '%s\n' "$recentlog" |
+activity=$(printf '%s\n' "$recentlog" |
 	grep -E 'sync\.state|full-check|sync\.error|sync\.full\.error|Missing events|backup: full scan|queue for' |
 	tail -8 |
 	sed -E 's/^[0-9-]+T([0-9:]+)[^ ]* [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1  /
-	        s/ as [0-9a-f]{24}.*//' |
-	sed "s/^/    ${dim}/; s/\$/${off}/"
+	        s/ as [0-9a-f]{24}.*//')
+
+printf '\n  %srecent%s\n' "$bold" "$off"
+# An idle jottad is the normal state between scans, but a bare heading with nothing
+# under it reads as a failed query rather than a quiet one. Say which it is.
+if [ -n "$activity" ]; then
+	printf '%s\n' "$activity" | sed "s/^/    ${dim}/; s/\$/${off}/"
+else
+	printf '    %snothing in %s%s\n' "$dim" "${SINCE#-}" "$off"
+fi
