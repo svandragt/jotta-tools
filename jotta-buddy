@@ -59,6 +59,15 @@ cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 100)}
 msgw=$((cols - 13))
 [ "$msgw" -lt 40 ] && msgw=40
 clip() { cut -c"1-$1"; }
+# Keep both ends of an over-long single line. Same reasoning as the wrapped error rows:
+# the tail carries the filename and the failure code, so cutting it loses the answer.
+squeeze() {
+	[ "${#1}" -le "$2" ] && { printf '%s' "$1"; return; }
+	_sh=$(($2 * 55 / 100))
+	_st=$(($2 - _sh - 5))
+	printf '%s ... %s' "$(printf '%s' "$1" | cut -c"1-$_sh")" \
+		"$(printf '%s' "$1" | cut -c"$((${#1} - _st + 1))-")"
+}
 clock() { printf '%s' "${1#*T}" | cut -c1-8; }
 
 printf '%sjotta buddy%s %s%s%s\n\n' "$bold" "$off" "$dim" "$(date '+%a %H:%M:%S')" "$off"
@@ -231,7 +240,7 @@ faults() {
 	_n=$(printf '%s' "$_top" | awk '{print $1}')
 	_tmsg=$(printf '%s' "$_top" | sed -E 's/^ *[0-9]+ +//')
 	if [ "$_n" -ge 5 ] && [ "$_tmsg" != "$_msg" ]; then
-		sub '' "${yellow}${_n}x${off} ${dim}$(printf '%s' "$_tmsg" | clip "$((msgw - 8))")${off}"
+		sub '' "${yellow}${_n}x${off} ${dim}$(squeeze "$_tmsg" "$((msgw - 8))")${off}"
 	fi
 }
 
@@ -325,6 +334,14 @@ bkdone=$(printf '%s\n' "$errlog" | grep -a 'backup: full scan.*completed' | tail
 bkat=$(printf '%s' "$bkdone" | cut -d' ' -f1)
 bktook=$(printf '%s' "$bkdone" | sed -n 's/.*completed in \([0-9]*\)\..*/\1/p')
 
+# The scan line also carries what it found, and that is a settled total. The JSON Count
+# is live, so mid-recount it reports a fraction as though it were the whole: 69872 files
+# and 3.1 GiB were seen while the real figure was 1057950 and 211.8 GiB, correcting
+# itself a minute later. Same rule as the verdict -- prefer the completed scan, and fall
+# back to the JSON only when no scan has completed in the window to read.
+bkfound=$(printf '%s' "$bkdone" |
+	sed -n 's/.*Found \([0-9]*\) files \([0-9.]*\)\([KMGT]\?i\?B\).*/\1 files  \2 \3/p')
+
 # jottad counts its own failures during a scan. Zero is the normal case and the
 # line is noise, but a non-zero count is the only number that says files are
 # being left behind rather than merely queued.
@@ -343,10 +360,11 @@ fi
 
 # One root reads like sync's local row, with the path inline. Several need a line
 # each, and the count above them is then the total across all of them.
+counted=${bkfound:-$bkf files  $(iec "$bkb")}
 if [ "$bkroots" -eq 1 ]; then
-	sub files "$bkf files  $(iec "$bkb")  ${dim}${bkpaths}${off}"
+	sub files "$counted  ${dim}${bkpaths}${off}"
 elif [ "$bkroots" -gt 1 ]; then
-	sub files "$bkf files  $(iec "$bkb")  ${dim}across $bkroots roots${off}"
+	sub files "$counted  ${dim}across $bkroots roots${off}"
 	printf '%s\n' "$bkpaths" | while IFS= read -r p; do
 		[ -n "$p" ] && sub '' "${dim}$p${off}"
 	done
@@ -373,7 +391,8 @@ activity=$(printf '%s\n' "$recentlog" |
 	grep -E 'sync\.state|full-check|sync\.error|sync\.full\.error|Missing events|backup: full scan|queue for' |
 	tail -8 |
 	sed -E 's/^[0-9-]+T([0-9:]+)[^ ]* [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1  /
-	        s/ as [0-9a-f]{24}.*//')
+	        s/ as [0-9a-f]{24}.*//
+	        s/\{"code":([0-9]+)[^}]*"error_id":"([^"]*)"[^}]*\}/\1 \2/g')
 
 printf '\n  %srecent%s\n' "$bold" "$off"
 # An idle jottad is the normal state between scans, but a bare heading with nothing
