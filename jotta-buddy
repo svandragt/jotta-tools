@@ -202,10 +202,23 @@ faults() {
 	_k=$(printf '%s' "$_msg" | sed -E "$klass")
 	_kn=$(printf '%s\n' "$1" | sed -E "$norm" | cut -f2- | sed -E "$klass" | grep -cxF "$_k" || true)
 	[ "${_kn:-0}" -gt "$_reps" ] && _when="$_when, $_kn of this kind"
-	# Wrap rather than clip. The path is the actionable half and it sits at the end, so
-	# truncating threw away the answer and left the fault class, which the summary line
-	# already implies. Three lines is the ceiling: past that it is a wall, not a report.
-	_f=$(printf '%s\n' "$_msg" | fold -s -w "$((msgw - 2))" | head -3)
+	# Both ends of the message matter and the middle does not: the fault class opens it,
+	# the failing filename and the error code close it, and a deep directory path fills
+	# everything between. Clipping the end lost the path, and raising the line ceiling
+	# just moved the loss to whichever end fell outside it -- there is always a deeper
+	# path. Eliding the middle keeps both ends whatever the length.
+	_w=$((msgw - 2))
+	# Three lines of budget against a ceiling of four. fold breaks at spaces and leaves
+	# line ends short, so budgeting the full four overflowed and lost the last line --
+	# twice, at four and at three and a half. The slack costs a little more elision on a
+	# narrow terminal and none at all on a wide one, where the text fits regardless.
+	_budget=$((_w * 3))
+	if [ "${#_msg}" -gt "$_budget" ]; then
+		_head=$((_budget * 55 / 100))
+		_tail=$((_budget - _head - 5))
+		_msg="$(printf '%s' "$_msg" | cut -c"1-$_head") ... $(printf '%s' "$_msg" | cut -c"$((${#_msg} - _tail + 1))-")"
+	fi
+	_f=$(printf '%s\n' "$_msg" | fold -s -w "$_w" | head -4)
 	sub error "${red}$(printf '%s\n' "$_f" | head -1)${off}"
 	printf '%s\n' "$_f" | tail -n +2 | while IFS= read -r _l; do
 		sub '' "${red}${_l}${off}"
