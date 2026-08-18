@@ -48,11 +48,17 @@ check:
 	@timeout 30 script -qec "./jotta-buddy --once" /dev/null 2>/dev/null | \
 		grep -qa '\[2J' && { echo "FAIL  --once re-execs watch, so watch recurses"; exit 1; } || \
 		echo "ok  --once never re-execs"
-	@timeout 30 script -qec "./jotta-buddy" /dev/null 2>/dev/null > /tmp/jotta-buddy-check; \
-	for a in 1m:bold 2m:dim 31m:red 32m:green 33m:yellow; do \
-		grep -qa "\[0\?;\?$${a%%:*}" /tmp/jotta-buddy-check || \
-			{ echo "FAIL  watch -c dropped $${a##*:}"; rm -f /tmp/jotta-buddy-check; exit 1; }; \
-	done; rm -f /tmp/jotta-buddy-check; echo "ok  watch keeps bold, dim and colour"
+	@# Which colours appear depends on what jottad is doing -- yellow needs a stall, a
+	@# transfer or a retry loop -- so naming them made this fail on a quiet machine.
+	@# The real claim is that watch drops nothing the direct run emits. Codes are
+	@# reduced to bare SGR numbers because watch rewrites [1m as [0;1m.
+	@sgr() { grep -oa '\[[0-9;]*m' | tr -d '[m' | tr ';' '\n' | grep -vxE '0|39' | sort -u; }; \
+	JOTTA_BUDDY_COLOR=1 ./jotta-buddy --once | sgr > /tmp/jotta-buddy-want; \
+	timeout 30 script -qec "./jotta-buddy" /dev/null 2>/dev/null | sgr > /tmp/jotta-buddy-got; \
+	missing=$$(comm -23 /tmp/jotta-buddy-want /tmp/jotta-buddy-got | tr '\n' ' '); \
+	rm -f /tmp/jotta-buddy-want /tmp/jotta-buddy-got; \
+	[ -z "$$missing" ] || { echo "FAIL  watch dropped SGR: $$missing"; exit 1; }; \
+	echo "ok  watch keeps every attribute the direct run emits"
 
 status:
 	systemctl --user list-timers jotta-canary.timer

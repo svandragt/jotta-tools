@@ -223,8 +223,15 @@ extra=''
 # A completed full-check is the only positive evidence; a loop stop newer than the
 # last completion is the plainest statement that nothing has synced since.
 checked=$(printf '%s\n' "$errlog" | grep -a 'full-check completed' | tail -1 | cut -d' ' -f1)
+started=$(printf '%s\n' "$errlog" | grep -a 'full-check started' | tail -1 | cut -d' ' -f1)
 stopped=$(printf '%s\n' "$errlog" | grep -a 'event loop stopped' | tail -1 | cut -d' ' -f1)
-if [ -n "$stopped" ] && { [ -z "$checked" ] || [ "$stopped" \> "$checked" ]; }; then
+# A check that has started and not yet finished is the normal state of a daemon that
+# only just came up, and reporting it as "no full-check" made a healthy boot look
+# broken. A start newer than the last stop also means the loop is having another go,
+# so it outranks the stop.
+if [ -n "$started" ] && [ "$started" \> "${checked:-}" ] && [ "$started" \> "${stopped:-}" ]; then
+	group sync "${yellow}full-check running${off}  ${dim}since $(clock "$started")${off}"
+elif [ -n "$stopped" ] && { [ -z "$checked" ] || [ "$stopped" \> "$checked" ]; }; then
 	group sync "${red}event loop stopped $(clock "$stopped"), no clean pass since${off}"
 elif [ -n "$checked" ]; then
 	group sync "${green}clean${off}  ${dim}full-check completed $(clock "$checked")${off}"
@@ -234,7 +241,13 @@ fi
 
 sub state "${shown}${dim}${extra}${off}"
 sub local "$lf files  $(iec "$lb")  ${dim}$root${off}"
-sub remote "$rf files  $(iec "$rb")"
+# RemoteCount is zero until jottad has listed the server tree, which it has not done
+# yet on a fresh daemon. Printing "0 files 0 B" then reads as an empty account.
+if [ "$rf" -eq 0 ] && [ "$lf" -gt 0 ]; then
+	sub remote "${dim}not counted yet${off}"
+else
+	sub remote "$rf files  $(iec "$rb")"
+fi
 
 if [ "$rf" -gt "$lf" ]; then
 	# Not a backlog: a folder present remotely and absent locally sits here
