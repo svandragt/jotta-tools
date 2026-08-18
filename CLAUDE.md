@@ -101,7 +101,7 @@ the only durable record.
 | `Missing events. Restart sync please` | restarts itself | 20s | briefly | self-healing unless it wedges |
 | 421 `CorruptUploadOpenApiException` on a file under `Sync` | stops | 30s, then the retry lands | everything queued | self-healing, confirmed 2026-08-18 00:02:20 on `/.canary-<host>` |
 | `error mkdir /backup/<uuid>/...` + `INVALID_ARGUMENT code: 12` | keeps cycling | every backup scan, ~hourly | that subtree only, silently | rename the local directory. Do **not** delete it: see below |
-| `Error deleting /backup/<uuid>/...` + `InvalidArgument` | keeps cycling | every backup scan | nothing, but permanently | an ignore rule, because no local change can reach it |
+| `Error deleting /backup/<uuid>/...` + `InvalidArgument` | keeps cycling | every backup scan | nothing, but permanently | nothing known. Reported as [jotta-cli-issues#228](https://github.com/jotta/jotta-cli-issues/issues/228) |
 
 ### Rename a name the server rejects, never delete it
 
@@ -127,18 +127,36 @@ jotta-cli dump | grep '\\n'
 Renaming avoids all of this: the remote folder never existed, so there is nothing
 for jottad to delete, and the new name backs up normally.
 
-To clear one that has already reached this state, add an ignore rule. Build the
-pattern out of the *doubled* text rather than a newline, so it stays an ordinary
-shell argument, and prove it with `ignores test` before adding it — a pattern that
-also matches the real directory silently drops it from backup:
+Once it has reached this state there is no known way out from the client, and the
+fault is filed upstream as
+[jotta-cli-issues#228](https://github.com/jotta/jotta-cli-issues/issues/228).
+Everything below was tried and ruled out on 2026-08-18, so do not spend the evening
+on it again:
+
+- **an ignore rule makes it worse.** jottad reads a newly ignored path as "remove
+  from the remote", which is precisely the rejected delete. The rule was added, the
+  delete still fired on the next scan, and the rule was removed again.
+- **a daemon restart does not help.** The row lives in the local database and
+  survives into the new pid.
+- **recreating the directory and renaming it does not help.** A rename still has to
+  delete the old name remotely, and that is the call being refused.
+- **the web interface has nothing to act on.** The `mkdir` never succeeded, so
+  `jotta-cli ls Backup/<device>/...` lists only the valid sibling.
+- **the trash is a red herring.** `**Trash/**` is ignored already, so a deleted-to-
+  trash copy plays no part.
+
+The damage is one log line per scan and no data at risk, so the practical answer is
+to leave it. If you do reach for an ignore rule for some other reason, build the
+pattern from the *doubled* text rather than a newline, so it stays an ordinary shell
+argument, and prove it with `ignores test` first — a pattern that also matches the
+real directory silently drops it from backup:
 
 ```sh
 p='.config/mozilla/firefox/pkQtSp0i.Profile 1*pkQtSp0i.Profile 1'
 jotta-cli ignores test -p "$p" --path '.config/mozilla/firefox/pkQtSp0i.Profile 1'
-jotta-cli ignores add --pattern "$p" --backup /home/sander
 ```
 
-The first command must report `did not match`. `jotta-cli ignores rem` undoes it.
+That must report `did not match` before you would ever add it.
 
 ### Looks like signal, is not
 
