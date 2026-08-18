@@ -48,17 +48,22 @@ check:
 	@timeout 30 script -qec "./jotta-buddy --once" /dev/null 2>/dev/null | \
 		grep -qa '\[2J' && { echo "FAIL  --once re-execs watch, so watch recurses"; exit 1; } || \
 		echo "ok  --once never re-execs"
-	@# Which colours appear depends on what jottad is doing -- yellow needs a stall, a
-	@# transfer or a retry loop -- so naming them made this fail on a quiet machine.
-	@# The real claim is that watch drops nothing the direct run emits. Codes are
-	@# reduced to bare SGR numbers because watch rewrites [1m as [0;1m.
-	@sgr() { grep -oa '\[[0-9;]*m' | tr -d '[m' | tr ';' '\n' | grep -vxE '0|39' | sort -u; }; \
-	JOTTA_BUDDY_COLOR=1 ./jotta-buddy --once | sgr > /tmp/jotta-buddy-want; \
-	timeout 30 script -qec "./jotta-buddy" /dev/null 2>/dev/null | sgr > /tmp/jotta-buddy-got; \
-	missing=$$(comm -23 /tmp/jotta-buddy-want /tmp/jotta-buddy-got | tr '\n' ' '); \
-	rm -f /tmp/jotta-buddy-want /tmp/jotta-buddy-got; \
-	[ -z "$$missing" ] || { echo "FAIL  watch dropped SGR: $$missing"; exit 1; }; \
-	echo "ok  watch keeps every attribute the direct run emits"
+	@# Assert only the attributes that are always on screen. Naming all five failed on a
+	@# quiet machine, because yellow needs a stall, a transfer or a retry loop. Comparing
+	@# a direct run against a watch run failed too, and worse -- two samples taken seconds
+	@# apart on a live daemon legitimately differ, so the check went red on a healthy
+	@# tool. Bold is the heading and the group labels, dim is every timestamp, and one of
+	@# the three colours is always present because query and action are always coloured.
+	@timeout 30 script -qec "./jotta-buddy" /dev/null 2>/dev/null > /tmp/jotta-buddy-check; \
+	sgr=$$(grep -oa '\[[0-9;]*m' /tmp/jotta-buddy-check | tr -d '[m' | tr ';' '\n' | sort -u); \
+	rm -f /tmp/jotta-buddy-check; \
+	for want in 1 2; do \
+		printf '%s\n' "$$sgr" | grep -qx "$$want" || \
+			{ echo "FAIL  watch dropped SGR $$want"; exit 1; }; \
+	done; \
+	printf '%s\n' "$$sgr" | grep -qxE '31|32|33' || \
+		{ echo "FAIL  watch dropped every colour"; exit 1; }; \
+	echo "ok  watch keeps bold, dim and colour"
 
 status:
 	systemctl --user list-timers jotta-canary.timer

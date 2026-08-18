@@ -1,7 +1,7 @@
 # jotta-canary
 
 Alerts your phone when a machine's Jottacloud sync folder stops moving, plus
-[`jotta-buddy`](#jotta-buddy) for checking the state of sync by hand.
+[`jotta-buddy`](#jotta-buddy) for checking sync and backup by hand.
 
 Jotta sync wedges silently. `jotta-cli status` keeps reporting `listening to
 events` or `Up to date` while the sync loop retries the same fatal error, and
@@ -18,12 +18,12 @@ get a push notification.
 - `jotta-cli`, logged in, with sync enabled. The folder can be anywhere; both
   scripts ask jottad where it is.
 - `curl`, `jq`, `make` and systemd user services.
+- `~/.local/bin` on your `PATH`. That is where the script installs.
+- An [ntfy](https://ntfy.sh) topic, subscribed to on your phone.
 
 Examples below write `~/me/sync` for the sync folder. Substitute your own if it
 differs; `jotta-buddy` prints it on the `local` row, or ask jottad directly with
 `jotta-cli status --json | jq -r .Sync.RootPath`.
-- `~/.local/bin` on your `PATH`. That is where the script installs.
-- An [ntfy](https://ntfy.sh) topic, subscribed to on your phone.
 
 ## Install
 
@@ -105,27 +105,34 @@ jotta buddy Mon 18:51:04
 
   daemon    running  pid 4321, up 06:24
   query     responsive
+  action    none  faults present are ones jottad retries by itself
 
   sync      clean  full-check completed 18:46:18
     state     Idle 12s ago
     local     91234 files  40.2 GiB  /home/user/me/sync
     remote    98765 files  71.5 GiB
     not local 7531 files  31.3 GiB
-    transfer  idle
+    transfer  up 192/7201 files  727.0 KiB of 6.6 GiB
 
   backup    clean  scan completed 18:44:02 in 21s
     files     1050041 files  200.4 GiB  /home/user
+    transfer  up 7756 files  7.0 GiB
+    error     Error uploading [#N] /home/user/.config/Slack/Service
+              Worker/CacheStorage/ID/UUID/ID_0 => upload: 421 CorruptUploadOpenApiException
+              18:20:14 - 18:44:02, seen 3x, 399 of this kind
 
   recent
     18:46:18  * sync full-check completed in 1m32.404821291s
     18:46:19  sync.state [Idle] => [Evaluating] after 501.615159ms
 ```
 
+That is the ordinary healthy shape, errors and all: a few hundred faults on files that
+rewrite themselves mid-upload, which jottad retries until they land.
+
 Read the `action` line and stop there if it says `none`. Everything below it is
-detail for when it does not.
+detail for when it does not. The other form names what to do:
 
 ```
-  action    none  faults present are ones jottad retries by itself
   action    sync stopped 22m ago and has not restarted -- systemctl --user restart jottad
 ```
 
@@ -178,7 +185,7 @@ The `not local` row counts files the server holds and this machine does not. It
 is not a backlog draining: a folder deleted locally but kept remotely sits there
 for good, while sync still reports itself up to date.
 
-Read the two verdicts first. Every indented row reports what jottad is *doing*,
+After `action`, the two verdicts. Every indented row reports what jottad is *doing*,
 and none of them says whether it worked — so a healthy machine and a broken one
 both show a list of errors, and there is no telling them apart at a glance. There
 are always some errors in a few hours of log. A completed pass is the only
@@ -260,7 +267,7 @@ reports `Checking for changes...` and `Mode: listening to events`.
   state     Evaluating 0s ago
   errors    Error syncing /casetest.txt already exists with different case
             23:14:02 - 23:15:32, seen 2x
-            54 error lines in 24h
+            54 error lines in 4h
 ```
 
 The collision logs once and then goes quiet, while routine warnings keep
@@ -311,11 +318,7 @@ things.
 Exit codes are `0` healthy, `1` daemon not running, `2` wedged and `64` bad usage,
 so it can gate a script.
 
-`JOTTA_BUDDY_DEADLINE` (default 15) is how many seconds to wait for jottad
-before calling it wedged. `JOTTA_BUDDY_SINCE` (default `-30min`) is how far back
-to read the journal for activity. `JOTTA_BUDDY_ERRSINCE` (default `-24h`) is the
-window for errors, which is wider on purpose: a loop that started this morning
-is still why nothing is moving now.
+The environment overrides are listed [above](#jotta-buddy).
 
 It is symlinked rather than copied, so edits in the clone take effect straight
 away. Do not move it into the sync folder: `~/bin` is a symlink into the synced
