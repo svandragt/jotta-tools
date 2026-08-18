@@ -110,10 +110,10 @@ worse one. jottad sees the local directory go, tries to delete the matching remo
 folder, and the server rejects the *name* on delete exactly as it did on mkdir:
 
 ```
-Deleting remote folder: /backup/<uuid>/sander/.config/.../<bad name>
-Error deleting /backup/<uuid>/sander/.config/.../<bad name>
+Deleting remote folder: /backup/<uuid>/user/.config/.../<bad name>
+Error deleting /backup/<uuid>/user/.config/.../<bad name>
   rpc error: code = InvalidArgument ... INVALID_ARGUMENT code 12
-marked /home/sander/.config/.../<bad name> as dirty
+marked /home/user/.config/.../<bad name> as dirty
 ```
 
 It then retries on every scan, forever. The local directory is gone, so no local
@@ -176,7 +176,7 @@ error filter at all, which is what makes a stale exclusion here hard to notice) 
 `CorruptUploadOpenApiException` (421) on a file that rewrites itself mid-upload —
 firefox `cookies.sqlite-wal`, `sessionstore-backups/*.jsonlz4`, session JSON —
 the checksum stops matching what was allocated, and the retry lands. Common in
-the `/home/sander` backup set, so it dominates the 24h count without meaning
+the `/home/user` backup set, so it dominates the 4h count without meaning
 anything. A 421 on a file under `Sync` is **not** the same thing: it stops the
 event loop, and the file it names is usually `/.canary-<host>` simply because the
 canary is the only writer in an otherwise idle sync folder, so it is the upload in

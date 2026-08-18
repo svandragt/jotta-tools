@@ -212,9 +212,9 @@ red verdict always comes with a lead:
               at 00:02:20
 
   backup    clean  scan completed 23:22:23 in 20s
-    error     Error deleting /backup/UUID/sander/.config/Slack/IndexedDB/https_
+    error     Error deleting /backup/UUID/user/.config/Slack/IndexedDB/https_
               at 23:23:25
-              5x Error deleting /backup/UUID/sander/.config/mozilla/firefox/
+              5x Error deleting /backup/UUID/user/.config/mozilla/firefox/
 ```
 
 One shared list ranked across both put backup in a position to hold the only row
@@ -292,7 +292,7 @@ Linux and rejected by the API, so the remote `mkdir` fails on every backup scan
 and everything under it is skipped:
 
 ```
-  errors    error mkdir /backup/UUID/sander/.config/mozilla/firefox/pkQtSp
+  errors    error mkdir /backup/UUID/user/.config/mozilla/firefox/pkQtSp
             seen 6x
 ```
 
