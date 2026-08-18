@@ -284,7 +284,9 @@ stopped=$(printf '%s\n' "$errlog" | grep -a 'event loop stopped' | tail -1 | cut
 # only just came up, and reporting it as "no full-check" made a healthy boot look
 # broken. A start newer than the last stop also means the loop is having another go,
 # so it outranks the stop.
+scanning=''
 if [ -n "$started" ] && [ "$started" \> "${checked:-}" ] && [ "$started" \> "${stopped:-}" ]; then
+	scanning=1
 	group sync "${yellow}full-check running${off}  ${dim}since $(clock "$started")${off}"
 elif [ -n "$stopped" ] && { [ -z "$checked" ] || [ "$stopped" \> "$checked" ]; }; then
 	group sync "${red}event loop stopped $(clock "$stopped"), no clean pass since${off}"
@@ -295,7 +297,10 @@ else
 fi
 
 sub state "${shown}${dim}${extra}${off}"
-sub local "$lf files  $(iec "$lb")  ${dim}$root${off}"
+# Count.Files only refreshes when a full-check completes, so while one is running it
+# describes the tree as it was before the current changes: 142041 was reported with
+# 152388 files on disk. Saying so beats quietly presenting it as current.
+sub local "$lf files  $(iec "$lb")  ${dim}$root${scanning:+ (before this scan)}${off}"
 # RemoteCount is zero until jottad has listed the server tree, which it has not done
 # yet on a fresh daemon. Printing "0 files 0 B" then reads as an empty account.
 if [ "$rf" -eq 0 ] && [ "$lf" -gt 0 ]; then
@@ -304,9 +309,13 @@ else
 	sub remote "$rf files  $(iec "$rb")"
 fi
 
-if [ "$rf" -gt "$lf" ]; then
+if [ "$rf" -gt "$lf" ] && [ -z "$scanning" ]; then
 	# Not a backlog: a folder present remotely and absent locally sits here
 	# forever while sync still reports up to date. "behind" implied it drains.
+	#
+	# Withheld mid-scan, because it subtracts a stale local count from a fresh remote
+	# one. During an upload that inflates it into a flat lie -- it read 14733 files
+	# "not local" while 10347 of those had just been copied in and were sitting on disk.
 	sub 'not local' "$((rf - lf)) files  $(iec $((rb - lb)))"
 fi
 
