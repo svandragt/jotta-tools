@@ -121,6 +121,23 @@ jotta buddy Mon 18:51:04
     18:46:19  sync.state [Idle] => [Evaluating] after 501.615159ms
 ```
 
+Read the `action` line and stop there if it says `none`. Everything below it is
+detail for when it does not.
+
+```
+  action    none  faults present are ones jottad retries by itself
+  action    sync stopped 22m ago and has not restarted -- systemctl --user restart jottad
+```
+
+It cannot be answered by naming faults, because the next fault is always one nobody
+has seen. It can be answered by recovery, which splits them cleanly: a 421, a
+`DeadlineExceeded` or a DNS timeout stops the event loop and jottad restarts it
+within thirty seconds, while a case collision, a name the server refuses, a wedge or
+a stopped daemon wait for a person. So the test is not which error but whether the
+loop came back — a stop with no restart and no completed check after it, well past
+the thirty second retry, is one that is not recovering. A non-zero backup failure
+count counts too, since that is jottad reporting files left behind.
+
 Sync and backup get a verdict each because they fail differently. Sync stops its
 event loop and goes quiet, so it fails loudly and you notice. Backup keeps
 cycling whatever happens, so it fails silently — it can skip a subtree for months

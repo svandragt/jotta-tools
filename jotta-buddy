@@ -280,6 +280,46 @@ extra=''
 checked=$(printf '%s\n' "$errlog" | grep -a 'full-check completed' | tail -1 | cut -d' ' -f1)
 started=$(printf '%s\n' "$errlog" | grep -a 'full-check started' | tail -1 | cut -d' ' -f1)
 stopped=$(printf '%s\n' "$errlog" | grep -a 'event loop stopped' | tail -1 | cut -d' ' -f1)
+
+# jottad counts its own failures during a scan. Zero is the normal case and the
+# line is noise, but a non-zero count is the only number that says files are
+# being left behind rather than merely queued.
+scanerr=$(printf '%s' "$errlog" |
+	sed -n 's/.*errors\[\([0-9]*\) files \([0-9]*\) bytes\].*/\1 \2/p' | grep -v '^0 ' | tail -1)
+
+# Whether a person has to do something. This cannot be answered by naming faults --
+# there are too many and the next one is always unknown -- but it can be answered by
+# recovery, which splits them cleanly. A 421, a DeadlineExceeded or a DNS timeout stops
+# the loop and jottad restarts it within 30 seconds. A case collision, a name the
+# server refuses, a wedge or a dead daemon do not clear until someone intervenes. So
+# the test is not "which error" but "did the loop come back".
+#
+# Silence is the tell: a stop with no start and no completion after it, older than the
+# 30s retry by a wide margin, is a stop that is not recovering. Everything else is
+# jottad coping, however loud the errors row looks.
+#
+# ponytail: the red branch has no automated check. It cannot be reproduced on a healthy
+# machine -- every stop restarts within 30s -- and asserting it from the Makefile would
+# test a copy of this comparison, which can pass while this code breaks. It was verified
+# by hand against a five-case truth table: recovered-by-restart, recovered-by-completion,
+# never-stopped, stopped-but-inside-the-retry-window, and stopped-and-silent. To make it
+# testable, lift the decision out where a test can call it with its four timestamps.
+action=''
+if [ -n "$stopped" ] && [ "$stopped" \> "${started:-}" ] && [ "$stopped" \> "${checked:-}" ]; then
+	sincestop=$(( $(date +%s) - $(date -d "$stopped" +%s 2>/dev/null || date +%s) ))
+	[ "$sincestop" -gt 300 ] &&
+		action="sync stopped $((sincestop / 60))m ago and has not restarted -- systemctl --user restart jottad"
+fi
+# A non-zero scan failure count is jottad saying files were left behind, which no
+# amount of retrying has fixed.
+[ -z "$action" ] && [ -n "$scanerr" ] &&
+	action="backup left $(echo "$scanerr" | cut -d' ' -f1) files behind -- see the backup error below"
+
+if [ -n "$action" ]; then
+	row action "${red}${action}${off}"
+else
+	row action "${green}none${off}  ${dim}faults present are ones jottad retries by itself${off}"
+fi
 # A check that has started and not yet finished is the normal state of a daemon that
 # only just came up, and reporting it as "no full-check" made a healthy boot look
 # broken. A start newer than the last stop also means the loop is having another go,
@@ -354,8 +394,6 @@ bkfound=$(printf '%s' "$bkdone" |
 # jottad counts its own failures during a scan. Zero is the normal case and the
 # line is noise, but a non-zero count is the only number that says files are
 # being left behind rather than merely queued.
-scanerr=$(printf '%s' "$errlog" |
-	sed -n 's/.*errors\[\([0-9]*\) files \([0-9]*\) bytes\].*/\1 \2/p' | grep -v '^0 ' | tail -1)
 
 if [ "$bkroots" -eq 0 ]; then
 	group backup "${dim}none configured${off}"
