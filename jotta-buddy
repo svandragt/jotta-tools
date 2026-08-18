@@ -130,8 +130,18 @@ errs=''
 norm='s/^([^ ]+) [^ ]+ [^ ]+ (pid:[0-9]+ [0-9\/]+ [0-9:]+ )?/\1\t/
       s/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/UUID/g
       s/[0-9a-f]{16,}/ID/g
+      s/"x-id":"[^"]*"/"x-id":ID/g
+      s/\[#[0-9]+\]/[#N]/g
       s/[0-9]+\.[0-9]+[munµ]?s/DUR/g
       s/\[[A-Za-z0-9_-]{8,}\]/[ID]/g'
+
+# Same fault, different file, is still the same fault. norm keeps the path because it
+# is the actionable half, which means a mass failure counts as hundreds of unique
+# messages seen once each: no repeat count, no volume line, just a large total and no
+# clue the lines are one event. klass drops the path as well, purely to count how many
+# share a class. The path runs from the first slash to the " => ", because jottad's
+# paths contain spaces and cannot be matched as a single token.
+klass='s| /.* => | PATH => |'
 
 # Split the errors by subsystem, and rank inside each. One shared list ranked
 # globally meant backup could hold the only row on offer: it is far noisier, so a
@@ -179,6 +189,13 @@ faults() {
 	# which this is.
 	_when="at $_a"
 	[ "$_a" != "$_b" ] && _when="$_a - $_b, seen ${_reps}x"
+
+	# How many share the fault class, whatever file they hit. 396 uploads failing the
+	# same way in ten minutes is one event, and without this it read as 396 unrelated
+	# singletons under a total that explained nothing.
+	_k=$(printf '%s' "$_msg" | sed -E "$klass")
+	_kn=$(printf '%s\n' "$1" | sed -E "$norm" | cut -f2- | sed -E "$klass" | grep -cxF "$_k" || true)
+	[ "${_kn:-0}" -gt "$_reps" ] && _when="$_when, $_kn of this kind"
 	sub error "${red}$(printf '%s' "$_msg" | clip "$((msgw - 2))")${off}"
 	sub '' "${dim}${_when}${off}"
 
