@@ -87,9 +87,14 @@ eval "$(printf '%s' "$status" | jq -r '
 	@sh "lf=\(.Sync.Count.Files//0) lb=\(.Sync.Count.Bytes//0)",
 	@sh "rf=\(.Sync.RemoteCount.Files//0) rb=\(.Sync.RemoteCount.Bytes//0)",
 	@sh "up=\(.State.Uploading|length) dl=\(.State.Downloading|length)",
+	@sh "cuf=\(.Sync.WorkingProgress.CompletedUpload.Files//0) cub=\(.Sync.WorkingProgress.CompletedUpload.Bytes//0)",
+	@sh "tuf=\(.Sync.WorkingProgress.TotalUpload.Files//0) tub=\(.Sync.WorkingProgress.TotalUpload.Bytes//0)",
+	@sh "cdf=\(.Sync.WorkingProgress.CompletedDownload.Files//0) cdb=\(.Sync.WorkingProgress.CompletedDownload.Bytes//0)",
+	@sh "tdf=\(.Sync.WorkingProgress.TotalDownload.Files//0) tdb=\(.Sync.WorkingProgress.TotalDownload.Bytes//0)",
 	@sh "on=\(.Sync.Enabled//false) auto=\(.Sync.Automatic//false) root=\(.Sync.RootPath//"?")",
 	@sh "bkroots=\([.Backup.State.Enabled.Backups[]?]|length)",
-	@sh "bkf=\([.Backup.State.Enabled.Backups[]?.Count.Files]|add//0) bkb=\([.Backup.State.Enabled.Backups[]?.Count.Bytes]|add//0)"
+	@sh "bkf=\([.Backup.State.Enabled.Backups[]?.Count.Files]|add//0) bkb=\([.Backup.State.Enabled.Backups[]?.Count.Bytes]|add//0)",
+	@sh "bkuf=\([.Backup.State.Enabled.Backups[]?.Uploading.Files]|add//0) bkub=\([.Backup.State.Enabled.Backups[]?.Uploading.Bytes]|add//0)"
 ')"
 
 # Backup roots one per line. Count is live, but History is not -- it sat on a scan
@@ -224,8 +229,11 @@ fi
 when=''
 [ -n "$age" ] && { [ "$age" -lt 90 ] && when="${age}s ago" || when="$((age / 60))m ago"; }
 
-# Evaluating and Working are transient. Stalling in one is the whole symptom.
-if [ -n "$age" ] && [ "$age" -gt 900 ] && [ -n "$state" ] && [ "$state" != Idle ]; then
+# Evaluating and Working are transient. Stalling in one is the whole symptom -- but a
+# large upload holds [Working] without a transition for as long as the transfer takes,
+# and that is progress, not a stall. Files in flight settle it either way.
+if [ -n "$age" ] && [ "$age" -gt 900 ] && [ -n "$state" ] && [ "$state" != Idle ] &&
+	[ "$tuf" -eq 0 ] && [ "$tdf" -eq 0 ]; then
 	shown="${yellow}$state for $((age / 60))m -- stalled?${off}"
 else
 	shown="${state:-unknown}${when:+ ${dim}${when}${off}}"
@@ -272,7 +280,17 @@ if [ "$rf" -gt "$lf" ]; then
 	sub 'not local' "$((rf - lf)) files  $(iec $((rb - lb)))"
 fi
 
-if [ "$up" -gt 0 ] || [ "$dl" -gt 0 ]; then
+# .State.Uploading is an empty object even with 8092 files in flight, so the row read
+# "idle" through an 11 GiB upload -- it was watching a field that never fills. The
+# real figures are in .Sync.WorkingProgress, which is absent when there is nothing to
+# do. .State.Uploading stays as a fallback because it costs one branch and the failure
+# it would cover is exactly the one being fixed here.
+if [ "$tuf" -gt 0 ] || [ "$tdf" -gt 0 ]; then
+	moving=''
+	[ "$tuf" -gt 0 ] && moving="up $cuf/$tuf files  $(iec "$cub") of $(iec "$tub")"
+	[ "$tdf" -gt 0 ] && moving="${moving:+$moving   }down $cdf/$tdf files  $(iec "$cdb") of $(iec "$tdb")"
+	sub transfer "${yellow}${moving}${off}"
+elif [ "$up" -gt 0 ] || [ "$dl" -gt 0 ]; then
 	sub transfer "${yellow}up $up  down $dl${off}"
 else
 	sub transfer "${dim}idle${off}"
@@ -312,6 +330,10 @@ elif [ "$bkroots" -gt 1 ]; then
 		[ -n "$p" ] && sub '' "${dim}$p${off}"
 	done
 fi
+# Backup uploads the same files sync does when they land under its root, and had no
+# in-flight figure at all. The field can go negative -- it reports a delta, and -3 was
+# seen with nothing happening -- so only a positive count means anything.
+[ "${bkuf:-0}" -gt 0 ] && sub transfer "${yellow}up $bkuf files  $(iec "$bkub")${off}"
 faults "$bkerrs"
 
 # Anything carrying neither a sync nor a backup marker cannot be attributed, and a
