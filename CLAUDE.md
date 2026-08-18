@@ -95,7 +95,7 @@ the only durable record.
 | Fault | Loop | Retry | Blocks | Clears by |
 |---|---|---|---|---|
 | `Case Collision in tree` | stops | ~90s, identical | everything queued after it | delete either side of the pair |
-| jottad unresponsive | no reply at all | n/a | everything | `systemctl --user restart jottad` |
+| jottad unresponsive | no reply at all, but the journal may keep filling | n/a | everything | `systemctl --user restart jottad` |
 | `Allocate failed: DeadlineExceeded` | usually cycles, but stops the loop if it hits the canary upload | bursts 0-10s apart, 30s after a loop stop | transfers in that burst | cleared on its own |
 | `jottad.auth.err ... lookup id.jottacloud.com` | stops, restarts itself | 30s | everything until DNS answers | logs `=> RESOLVED` when it clears |
 | `Missing events. Restart sync please` | restarts itself | 20s | briefly | self-healing unless it wedges |

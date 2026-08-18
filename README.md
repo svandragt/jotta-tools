@@ -232,8 +232,10 @@ It adds the two things `jotta-cli status` will not tell you. The first is a
 different wedge from the one the canary catches: jottad accepts the connection
 and then never answers, so every `jotta-cli` command dies on its own two second
 deadline with `Connected but jottad did not respond to query within deadline`.
-The daemon looks healthy to systemd, sits at zero CPU, and stops logging. Only
-a restart clears it:
+The daemon looks healthy to systemd and only a restart clears it. Do not wait for
+it to go quiet first: caught live on 2026-08-18 it was still writing DEBUG lines
+to the journal seconds before the query timed out, so a busy log is no evidence
+that queries are being answered.
 
 ```sh
 systemctl --user restart jottad
@@ -360,3 +362,8 @@ dates in the sync folder to see which hosts are still writing:
 ```sh
 ls -l ~/me/sync/.canary-*
 ```
+
+## Licence
+
+[GPL-3.0](LICENSE). If you distribute a modified version, it stays under the same
+licence.
