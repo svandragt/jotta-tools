@@ -27,13 +27,39 @@ INTERVAL=${JOTTA_BUDDY_INTERVAL:-30}
 # one here. Only when stdout is a terminal: the canary runs this from a timer and
 # needs the exit code, which watch swallows. Each pass costs a jotta-cli query and
 # several journalctl reads, so the default interval is lazy, not watch's 2s.
-case ${1:-} in
---once | -1) ;;
-*)
+# Anything unrecognised is an error, not a cue to start watching. The catch-all used to
+# fall through to the watch branch, so a typo or an option that does not exist -- a
+# --colour=always borrowed from ls, say -- started the refresh loop and looked like it
+# had worked.
+once=''
+for arg in "$@"; do
+	case $arg in
+	--once | -1) once=1 ;;
+	-h | --help)
+		printf 'usage: %s [--once]\n\n' "${0##*/}"
+		printf 'Refreshes every %ss. --once prints one report and exits, which is also\n' "$INTERVAL"
+		printf 'what happens when output is not a terminal, so scripts get an exit code.\n\n'
+		printf 'Exit: 0 healthy, 1 daemon not running, 2 wedged, 64 bad usage.\n\n'
+		printf 'Environment:\n'
+		printf '  JOTTA_BUDDY_INTERVAL   refresh seconds (default 30)\n'
+		printf '  JOTTA_BUDDY_COLOR      set to any value to force colour off a terminal\n'
+		printf '  JOTTA_BUDDY_SINCE      recent-activity window (default -30min)\n'
+		printf '  JOTTA_BUDDY_ERRSINCE   error window (default -4h)\n'
+		printf '  JOTTA_BUDDY_DEADLINE   seconds to wait for jottad (default 15)\n'
+		exit 0
+		;;
+	*)
+		printf '%s: unknown argument: %s\n' "${0##*/}" "$arg" >&2
+		printf "try '%s --help'\n" "${0##*/}" >&2
+		exit 64
+		;;
+	esac
+done
+
+if [ -z "$once" ]; then
 	[ -t 1 ] && command -v watch >/dev/null 2>&1 &&
 		exec env JOTTA_BUDDY_COLOR=1 watch -c -t -n "$INTERVAL" "$0" --once
-	;;
-esac
+fi
 
 bold=''; dim=''; red=''; green=''; yellow=''; off=''
 # Under watch stdout is a pipe, so -t 1 is false and the colours would vanish.

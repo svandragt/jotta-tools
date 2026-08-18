@@ -150,9 +150,29 @@ stall clear is the usual reason you opened it. To print one report and exit:
 jotta-buddy --once
 ```
 
-Set `JOTTA_BUDDY_INTERVAL` to change the refresh, in seconds. The refresh is
-`watch(1)`, and it only kicks in when output is a terminal, so a script or a
-timer gets a single report and a usable exit code without asking for `--once`.
+The refresh is `watch(1)`, and it only kicks in when output is a terminal, so a
+script or a timer gets a single report and a usable exit code without asking for
+`--once`. Anything other than `--once` or `--help` is rejected rather than treated
+as a cue to start watching.
+
+Colour follows the terminal. To keep it when piping, set `JOTTA_BUDDY_COLOR`:
+
+```sh
+JOTTA_BUDDY_COLOR=1 jotta-buddy --once | less -R
+```
+
+| Variable | Default | What it does |
+|---|---|---|
+| `JOTTA_BUDDY_INTERVAL` | `30` | Refresh, in seconds |
+| `JOTTA_BUDDY_COLOR` | unset | Any value forces colour off a terminal |
+| `JOTTA_BUDDY_SINCE` | `-30min` | Window for the `recent` list |
+| `JOTTA_BUDDY_ERRSINCE` | `-4h` | Window for errors and the verdicts |
+| `JOTTA_BUDDY_DEADLINE` | `15` | Seconds to wait for jottad before calling it wedged |
+
+Widen `JOTTA_BUDDY_ERRSINCE` to look further back, at about a second of extra
+journal reading per additional four hours. It has to stay wider than the slowest
+retry that matters, since backup scans are hourly and anything under that makes
+hourly furniture read as breaking news.
 
 The `not local` row counts files the server holds and this machine does not. It
 is not a backlog draining: a folder deleted locally but kept remotely sits there
@@ -288,8 +308,8 @@ when sync is idle. The `state` row shows the age of the last transition, since
 `Working` for eight seconds and `Working` for forty minutes mean opposite
 things.
 
-Exit codes are `0` healthy, `1` daemon not running, `2` wedged, so it can gate
-a script.
+Exit codes are `0` healthy, `1` daemon not running, `2` wedged and `64` bad usage,
+so it can gate a script.
 
 `JOTTA_BUDDY_DEADLINE` (default 15) is how many seconds to wait for jottad
 before calling it wedged. `JOTTA_BUDDY_SINCE` (default `-30min`) is how far back
