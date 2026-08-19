@@ -13,8 +13,14 @@ set -eu
 
 # The ntfy topic is all that protects the alerts, so it stays out of this repo.
 TOPIC=$(cat "$HOME/.config/jotta-canary/topic")
-UPLOAD_GRACE_SECONDS=600
-QUERY_DEADLINE=30
+# Overridable so the check in the Makefile can run without a 10 minute sleep.
+UPLOAD_GRACE_SECONDS=${UPLOAD_GRACE_SECONDS:-600}
+QUERY_DEADLINE=${QUERY_DEADLINE:-30}
+# A VPN, a suspended laptop or a brief server wobble stops uploads for one run
+# and then fixes itself. Only a miss that survives a second run is worth waking
+# someone for.
+MISSES_BEFORE_ALERT=2
+MISS_COUNT="${XDG_STATE_HOME:-$HOME/.local/state}/jotta-canary/misses"
 
 notify() {
 	curl -fsS \
@@ -44,19 +50,38 @@ fi
 CANARY="$SYNC_ROOT/.canary-$(hostname)"
 REMOTE_CANARY="Sync/.canary-$(hostname)"
 
-date +%s >"$CANARY" || {
+started=$(date +%s)
+printf '%s\n' "$started" >"$CANARY" || {
 	notify "Cannot write the canary $CANARY."
 	exit 1
 }
 sleep "$UPLOAD_GRACE_SECONDS"
+
+# A machine that suspends mid-sleep wakes with no network and reads back the
+# checksum from before it slept, so the miss says nothing about sync. The clock
+# is the witness: the run outlasted by far the grace period it asked for.
+if [ $(( $(date +%s) - started )) -gt $(( UPLOAD_GRACE_SECONDS + 120 )) ]; then
+	echo "suspended during the grace period, no verdict from this run"
+	exit 0
+fi
 
 want=$(md5sum "$CANARY" | cut -d' ' -f1)
 # Columns: Id Size Checksum "Last Modified"; newest revision is the highest Id.
 got=$(jotta-cli ls "$REMOTE_CANARY" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $1+0 > id {id=$1; c=$3} END{print c}' || true)
 
 if [ "$want" = "$got" ]; then
+	rm -f "$MISS_COUNT"
 	exit 0
 fi
 
-notify "Canary not uploaded in $((UPLOAD_GRACE_SECONDS / 60)) min. Check: jotta-cli status"
+mkdir -p "$(dirname "$MISS_COUNT")"
+misses=$(( $(cat "$MISS_COUNT" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$misses" >"$MISS_COUNT"
+
+if [ "$misses" -lt "$MISSES_BEFORE_ALERT" ]; then
+	echo "canary missed ($misses of $MISSES_BEFORE_ALERT), no alert yet"
+	exit 1
+fi
+
+notify "Canary not uploaded for $misses runs. Check: jotta-cli status"
 exit 1

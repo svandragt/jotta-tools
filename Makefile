@@ -65,6 +65,32 @@ check:
 		{ echo "FAIL  watch dropped every colour"; exit 1; }; \
 	echo "ok  watch keeps bold, dim and colour"
 
+	@# A transient miss must stay quiet and a repeat one must alert, so drive both
+	@# with a stub jotta-cli that never lands the upload and a stub curl that
+	@# records the alert instead of sending it. Verified this way rather than by
+	@# reading the counter, because the alert is the behaviour that matters.
+	@d=$$(mktemp -d); mkdir -p $$d/bin $$d/sync; \
+	printf '#!/bin/sh\ncase "$$1" in status) echo "{\\"Sync\\":{\\"RootPath\\":\\"%s\\"}}";; *) echo "nothing found";; esac\n' "$$d/sync" >$$d/bin/jotta-cli; \
+	printf '#!/bin/sh\ntouch %s/alerted\n' "$$d" >$$d/bin/curl; \
+	chmod +x $$d/bin/jotta-cli $$d/bin/curl; \
+	run() { PATH="$$d/bin:$$PATH" XDG_STATE_HOME="$$d/state" UPLOAD_GRACE_SECONDS=0 ./jotta-canary >/dev/null 2>&1; }; \
+	run; test ! -e $$d/alerted || { echo "FAIL  first miss alerted"; rm -rf $$d; exit 1; }; \
+	run; test -e $$d/alerted || { echo "FAIL  second miss stayed quiet"; rm -rf $$d; exit 1; }; \
+	rm -rf $$d; echo "ok  canary alerts on the second miss, not the first"
+
+	@# A suspend during the grace period must not count as a miss at all, so run the
+	@# same never-lands stub twice with a date(1) that jumps an hour mid-run. Two real
+	@# misses alert, per the check above, so silence here is the guard working.
+	@d=$$(mktemp -d); mkdir -p $$d/bin $$d/sync; \
+	printf '#!/bin/sh\ncase "$$1" in status) echo "{\\"Sync\\":{\\"RootPath\\":\\"%s\\"}}";; *) echo "nothing found";; esac\n' "$$d/sync" >$$d/bin/jotta-cli; \
+	printf '#!/bin/sh\ntouch %s/alerted\n' "$$d" >$$d/bin/curl; \
+	printf '#!/bin/sh\nif [ -e %s/slept ]; then echo 99999; else touch %s/slept; echo 0; fi\n' "$$d" "$$d" >$$d/bin/date; \
+	chmod +x $$d/bin/jotta-cli $$d/bin/curl $$d/bin/date; \
+	run() { rm -f $$d/slept; PATH="$$d/bin:$$PATH" XDG_STATE_HOME="$$d/state" UPLOAD_GRACE_SECONDS=0 ./jotta-canary >/dev/null 2>&1; }; \
+	run; run; \
+	test ! -e $$d/alerted || { echo "FAIL  a suspended run counted as a miss"; rm -rf $$d; exit 1; }; \
+	rm -rf $$d; echo "ok  a suspend during the grace period gives no verdict"
+
 status:
 	systemctl --user list-timers jotta-canary.timer
 	@# systemctl status exits 3 when the unit is simply not running.

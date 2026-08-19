@@ -77,9 +77,23 @@ make status
 `jotta-cli status --json`), writes the current Unix time to
 `<root>/.canary-$(hostname)`, sleeps for the upload grace period, then reads
 the newest revision's checksum from `jotta-cli ls Sync/.canary-$(hostname)`. A
-match means sync is alive. A mismatch, or a missing remote file, sends the
-alert and exits non-zero, so the failure also shows up in
+match means sync is alive. A mismatch, or a missing remote file, counts as a
+miss and exits non-zero, so the failure shows up in
 `systemctl --user status jotta-canary.service`.
+
+A run that spans a suspend gives no verdict at all. The machine wakes with no
+network and reads back a checksum from before it slept, which looks exactly like
+a stall, so the canary compares the clock instead: a run that outlasted its
+grace period by more than two minutes exits without judging anything. The timer
+leaves out `Persistent=true` for the same reason, since a catch-up run fires the
+moment the machine resumes and reports a miss for a sync that is fine.
+
+A single miss does not alert either. A VPN or a brief server wobble stops
+uploads for one run and then clears on its own, so the alert waits for a
+second miss in a row, roughly an hour later on the hourly timer. The count lives
+in `~/.local/state/jotta-canary/misses` and a successful run deletes it. Set
+`MISSES_BEFORE_ALERT=1` in the script if you would rather hear about every
+miss.
 
 Asking for the path rather than assuming one is what stops the canary watching
 a directory nothing syncs, which would pass forever. The same query doubles as
@@ -348,6 +362,10 @@ md5sum ~/me/sync/.canary-$(hostname)
 The top row is the newest revision. If its checksum matches the local file, the
 upload did land and the alert was late rather than wrong. Raise
 `UPLOAD_GRACE_SECONDS`.
+
+**Two runs missed but sync is fine now.** The alert names how many runs missed.
+Delete `~/.local/state/jotta-canary/misses` to reset the count, or let the next
+healthy run clear it.
 
 **No alerts at all, ever.** Run `make test`. If nothing arrives, the problem is
 the topic or the phone subscription, not sync.

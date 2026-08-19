@@ -3,7 +3,9 @@ Description=Hourly Jottacloud sync health check
 
 [Timer]
 OnCalendar=hourly
-Persistent=true
+# No Persistent=true: the catch-up run fires the moment the machine resumes,
+# before the network is back, and reports a miss for a sync that is fine. The
+# next hourly run gives it an hour to catch up.
 RandomizedDelaySec=5min
 
 [Install]
