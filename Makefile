@@ -5,7 +5,7 @@ BIN := $(HOME)/.local/bin
 UNITS := $(HOME)/.config/systemd/user
 TOPIC_FILE := $(HOME)/.config/jotta-canary/topic
 
-.PHONY: install uninstall test check status
+.PHONY: install uninstall test check check-canary status
 
 install: $(TOPIC_FILE)
 	install -D -m 755 jotta-canary $(BIN)/jotta-canary
@@ -31,10 +31,19 @@ uninstall:
 test:
 	$(BIN)/jotta-canary --test
 
+# The canary's confirm loop is what stops a self-clearing jottad stall from
+# paging the phone, and neither of its branches can be verified by reading it:
+# one needs an upload that lands late, the other one that never lands. Both are
+# 10-25 minutes in real life, so canary-check stubs jotta-cli and cuts the
+# timings. It stubs curl too, so a red check cannot page anyone.
+check-canary:
+	@sh -n jotta-canary && echo "ok    canary syntax"
+	@./canary-check
+
 # The refresh loop re-execs jotta-buddy under watch(1), which has two ways to go
 # wrong that reading the script will not show you: it can recurse, and it can eat
 # the exit code the canary gates on. script(1) fakes the terminal the branch turns on.
-check:
+check: check-canary
 	@sh -n jotta-buddy && echo "ok  syntax"
 	@./jotta-buddy --once >/dev/null && echo "ok  --once exits 0"
 	@test "$$(./jotta-buddy | grep -c 'jotta buddy')" = 1 && \
@@ -73,7 +82,7 @@ check:
 	printf '#!/bin/sh\ncase "$$1" in status) echo "{\\"Sync\\":{\\"RootPath\\":\\"%s\\"}}";; *) echo "nothing found";; esac\n' "$$d/sync" >$$d/bin/jotta-cli; \
 	printf '#!/bin/sh\ntouch %s/alerted\n' "$$d" >$$d/bin/curl; \
 	chmod +x $$d/bin/jotta-cli $$d/bin/curl; \
-	run() { PATH="$$d/bin:$$PATH" XDG_STATE_HOME="$$d/state" UPLOAD_GRACE_SECONDS=0 ./jotta-canary >/dev/null 2>&1; }; \
+	run() { PATH="$$d/bin:$$PATH" XDG_STATE_HOME="$$d/state" UPLOAD_GRACE_SECONDS=0 CONFIRM_DEADLINE_SECONDS=0 ./jotta-canary >/dev/null 2>&1; }; \
 	run; test ! -e $$d/alerted || { echo "FAIL  first miss alerted"; rm -rf $$d; exit 1; }; \
 	run; test -e $$d/alerted || { echo "FAIL  second miss stayed quiet"; rm -rf $$d; exit 1; }; \
 	rm -rf $$d; echo "ok  canary alerts on the second miss, not the first"
@@ -86,7 +95,7 @@ check:
 	printf '#!/bin/sh\ntouch %s/alerted\n' "$$d" >$$d/bin/curl; \
 	printf '#!/bin/sh\nif [ -e %s/slept ]; then echo 99999; else touch %s/slept; echo 0; fi\n' "$$d" "$$d" >$$d/bin/date; \
 	chmod +x $$d/bin/jotta-cli $$d/bin/curl $$d/bin/date; \
-	run() { rm -f $$d/slept; PATH="$$d/bin:$$PATH" XDG_STATE_HOME="$$d/state" UPLOAD_GRACE_SECONDS=0 ./jotta-canary >/dev/null 2>&1; }; \
+	run() { rm -f $$d/slept; PATH="$$d/bin:$$PATH" XDG_STATE_HOME="$$d/state" UPLOAD_GRACE_SECONDS=0 CONFIRM_DEADLINE_SECONDS=0 ./jotta-canary >/dev/null 2>&1; }; \
 	run; run; \
 	test ! -e $$d/alerted || { echo "FAIL  a suspended run counted as a miss"; rm -rf $$d; exit 1; }; \
 	rm -rf $$d; echo "ok  a suspend during the grace period gives no verdict"

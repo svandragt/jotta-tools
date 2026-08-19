@@ -102,6 +102,7 @@ the only durable record.
 | 421 `CorruptUploadOpenApiException` on a file under `Sync` | stops | 30s, then the retry lands | everything queued | self-healing, confirmed 2026-08-18 00:02:20 on `/.canary-<host>` |
 | `error mkdir /backup/<uuid>/...` + `INVALID_ARGUMENT code: 12` | keeps cycling | every backup scan, ~hourly | that subtree only, silently | rename the local directory. Do **not** delete it: see below |
 | `Error deleting /backup/<uuid>/...` + `InvalidArgument` | keeps cycling | every backup scan | nothing, but permanently | nothing known. Reported as [jotta-cli-issues#228](https://github.com/jotta/jotta-cli-issues/issues/228) |
+| `Error syncing failed to list tree` (after `remote.cursor.get`/`GetCustomer` deadlines) | parks in `[Evaluating]` for 13-15 min, then gives up | restarts 30s later; the next full-check completes in ~45s | every upload for the duration | on its own. Do not act, and do not shorten the canary's confirm deadline below it |
 
 ### Rename a name the server rejects, never delete it
 
@@ -157,6 +158,37 @@ jotta-cli ignores test -p "$p" --path '.config/mozilla/firefox/pkQtSp0i.Profile 
 ```
 
 That must report `did not match` before you would ever add it.
+
+### The canary alerts, sync is fine when you look
+
+Three alerts, all the same fault: a `failed to list tree` timeout parked the sync
+loop in `[Evaluating]` for 13-15 minutes, jottad restarted itself, and the canary
+upload landed 11-13 minutes after being written. Measured on 2026-08-19:
+
+| Written | Landed | Delay | `[Evaluating]` spell |
+|---|---|---|---|
+| Aug 18 09:03:26 | 09:16:30 | 13m04s | 14m03s |
+| Aug 19 01:04:20 | 01:15:52 | 11m32s | 13m42s |
+| Aug 19 09:03:20 | 09:16:13 | 12m53s | 12m56s |
+
+The canary now looks at 10 minutes and keeps asking to 25 before it will call a
+miss, and a miss still has to survive a second run before anyone is woken, so a
+stall that clears itself no longer pages anyone. `make check` drives all of it
+against stub `jotta-cli`, `date` and `sleep`.
+
+The suspend guard and the confirm loop have to agree on what "too long" means.
+It compares elapsed time against the wait the run *asked for*, not against
+`UPLOAD_GRACE_SECONDS + 120`: polling to the confirm deadline legitimately
+outlasts the grace period by fifteen minutes, so the older formula reads every
+deadline-reaching run as a suspend, gives no verdict, and the canary goes
+permanently silent on real stalls. `canary-check` covers that specific mistake.
+
+Two things this cost, worth not repeating: `jotta-cli ls` reports `Last
+Modified` as the *local* mtime, so its timestamp says 09:03 for a file the
+server took at 09:16 and cannot be used to time a landing — only the journal
+can. And raising the canary's frequency is the wrong lever: a wedge stays
+wedged, so a faster cadence finds nothing the next hour would not, while every
+extra run is another chance to sample one of these windows.
 
 ### Looks like signal, is not
 

@@ -2,6 +2,10 @@
 Description=Hourly Jottacloud sync health check
 
 [Timer]
+# Hourly on purpose, and not more often. A wedge stays wedged, so a faster
+# cadence buys no detection it would not get next hour, while every extra run
+# is another chance to sample one of jottad's self-clearing 15-minute stalls.
+# A single run can also occupy 25 min, so the cadence has to stay well clear.
 OnCalendar=hourly
 # No Persistent=true: the catch-up run fires the moment the machine resumes,
 # before the network is back, and reports a miss for a sync that is fine. The

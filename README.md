@@ -71,26 +71,50 @@ To see when the check last ran and whether it passed:
 make status
 ```
 
+If you change either script, `make check` runs the checks. It stubs `jotta-cli`,
+`date` and `sleep`, so it drives the confirm loop, the miss counter and the
+suspend guard at their real timings in seconds, and it stubs `curl` too so a red
+check cannot page your phone.
+
 ## How it works
 
 `jotta-canary` asks jottad for the sync folder (`.Sync.RootPath` from
 `jotta-cli status --json`), writes the current Unix time to
 `<root>/.canary-$(hostname)`, sleeps for the upload grace period, then reads
 the newest revision's checksum from `jotta-cli ls Sync/.canary-$(hostname)`. A
-match means sync is alive. A mismatch, or a missing remote file, counts as a
-miss and exits non-zero, so the failure shows up in
-`systemctl --user status jotta-canary.service`.
+match means sync is alive.
+
+A miss does not decide anything on its own. The canary keeps asking, once a
+minute, until the confirm deadline: 25 minutes from the write by default. Only a
+canary that has still not landed by then counts as a miss and exits non-zero, so
+the failure shows up in `systemctl --user status jotta-canary.service`. One that
+lands late says so on stdout and exits 0, which puts the delay in the journal
+without waking anyone.
+
+That second window exists because jottad stalls that fix themselves are common
+and last longer than the grace period. Every false alert this tool sent before
+the deadline went in came from one: the remote tree listing times out, the sync
+loop sits in `[Evaluating]` for 13-15 minutes, gives up with `Error syncing
+failed to list tree`, restarts 30 seconds later, and the next full-check uploads
+the canary within a minute. The deadline is set clear of the worst measured case.
 
 A run that spans a suspend gives no verdict at all. The machine wakes with no
 network and reads back a checksum from before it slept, which looks exactly like
-a stall, so the canary compares the clock instead: a run that outlasted its
-grace period by more than two minutes exits without judging anything. The timer
+a stall, so the canary compares the clock instead: a run whose elapsed time
+outruns the wait it actually asked for by more than two minutes exits without
+judging anything. Measuring against the wait rather than the grace period is
+what lets the two coexist, since polling all the way to the confirm deadline
+legitimately outlasts the grace period by fifteen minutes. The timer
 leaves out `Persistent=true` for the same reason, since a catch-up run fires the
 moment the machine resumes and reports a miss for a sync that is fine.
 
 A single miss does not alert either. A VPN or a brief server wobble stops
 uploads for one run and then clears on its own, so the alert waits for a
-second miss in a row, roughly an hour later on the hourly timer. The count lives
+second miss in a row, roughly an hour later on the hourly timer. With the
+confirm deadline in front of it that puts the worst case for a genuinely wedged
+sync at about an hour and a half; drop `MISSES_BEFORE_ALERT` to 1 if you would
+rather hear about it inside half an hour, since the deadline already absorbs
+every self-clearing stall measured so far. The count lives
 in `~/.local/state/jotta-canary/misses` and a successful run deletes it. Set
 `MISSES_BEFORE_ALERT=1` in the script if you would rather hear about every
 miss.
@@ -103,10 +127,18 @@ canary alerts immediately instead of waiting out the grace period.
 The canary is per host. A single shared canary file has as many writers as you
 have machines, and Jotta turns that into conflicted copies.
 
-The grace period is `UPLOAD_GRACE_SECONDS` in the script, 10 minutes by
-default. Raise it if a machine has a slow uplink or a large backlog. The
-service unit allows 20 minutes, so raise `TimeoutStartSec` too if you go above
-that.
+The two windows are `UPLOAD_GRACE_SECONDS` (10 minutes, when the first look
+happens) and `CONFIRM_DEADLINE_SECONDS` (25 minutes, when a miss becomes an
+miss) at the top of the script. Raise the first if a machine has a slow uplink
+or a large backlog, and the second if a machine sees longer self-clearing
+stalls than this one. The service unit allows 35 minutes, so raise
+`TimeoutStartSec` too if you go above that: past the timeout systemd kills the
+run and the alert never fires.
+
+Cadence is hourly on purpose, and going faster is the wrong lever. A genuine
+wedge stays wedged, so a shorter interval finds nothing the next hour would not,
+while every extra run is another chance to land inside one of those 15-minute
+self-clearing stalls. A single run can also occupy 25 minutes.
 
 ## jotta-buddy
 
@@ -352,16 +384,30 @@ This leaves your topic file and the canary files in the sync folder. Delete
 
 ## Troubleshooting
 
-**You get an alert but sync looks fine.** Check the remote revisions directly:
+**You get an alert but sync looks fine by the time you look.** Since the
+confirm deadline went in this should mean a stall that lasted over 25 minutes
+and then cleared, which is worth knowing about. Check the remote revisions:
 
 ```sh
 jotta-cli ls Sync/.canary-$(hostname)
 md5sum ~/me/sync/.canary-$(hostname)
 ```
 
-The top row is the newest revision. If its checksum matches the local file, the
-upload did land and the alert was late rather than wrong. Raise
-`UPLOAD_GRACE_SECONDS`.
+The top row is the newest revision. If its checksum matches the local file the
+upload did land, so the question is when. The `Last Modified` column will not
+tell you: it is the local mtime, copied up with the file, not the moment the
+server took it. The journal is the only place that knows:
+
+```sh
+journalctl --user -u jottad --since "<the hour it alerted>" --no-pager |
+	grep -E 'upload of 1 files|sync.state|failed to list tree'
+```
+
+An `[Evaluating] => [Idle] after 13m…` followed by `Error syncing failed to
+list tree` and then a completed full-check is the self-clearing stall. Nothing
+to do about it beyond raising `CONFIRM_DEADLINE_SECONDS` if this machine sees it
+run longer than 25 minutes. If instead the loop never restarts, that is a wedge:
+`jotta-buddy` will name it, and `systemctl --user restart jottad` clears it.
 
 **Two runs missed but sync is fine now.** The alert names how many runs missed.
 Delete `~/.local/state/jotta-canary/misses` to reset the count, or let the next

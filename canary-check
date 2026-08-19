@@ -1,0 +1,127 @@
+#!/bin/sh
+# Drives the parts of the canary that cannot be verified by reading it: the
+# confirm loop that decides whether a miss is a stall, and the suspend guard
+# that has to survive it. Real runs take 10-25 minutes, so a stub jotta-cli
+# fakes the server, and where the real timings matter a stub date and a stub
+# sleep run the clock forward without waiting for it.
+#
+# A stub curl is not optional. Without it a failing check pages the phone.
+set -eu
+
+CANARY=$(cd "$(dirname "${1:-./jotta-canary}")" && pwd)/$(basename "${1:-./jotta-canary}")
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+mkdir -p "$d/bin" "$d/sync" "$d/home/.config/jotta-canary"
+echo stub-topic >"$d/home/.config/jotta-canary/topic"
+
+cat >"$d/bin/curl" <<'EOF'
+#!/bin/sh
+# Record the alert instead of sending it. The body is the last -d argument.
+while [ $# -gt 0 ]; do
+	[ "$1" = -d ] && { shift; echo "$1" >>"$STUB_ALERTS"; }
+	shift
+done
+EOF
+
+cat >"$d/bin/jotta-cli" <<'EOF'
+#!/bin/sh
+# status: answer with the sync root the canary should use.
+[ "$1" = status ] && { printf '{"Sync":{"RootPath":"%s"}}\n' "$STUB_ROOT"; exit 0; }
+
+# ls: withhold the file for the first STUB_WITHHOLD calls. It exits 0 while
+# printing "nothing found", exactly as the real one does, so a canary that
+# tested $? instead of the output would pass this and fail in production.
+n=$(cat "$STUB_TRIES" 2>/dev/null || echo 0)
+echo $((n + 1)) >"$STUB_TRIES"
+[ "$n" -ge "$STUB_WITHHOLD" ] || { echo "nothing found"; exit 0; }
+printf 'Id  Size  Checksum\n1   11    %s\n' \
+	"$(md5sum "$STUB_ROOT/.canary-$(hostname)" | cut -d' ' -f1)"
+EOF
+
+# A clock that moves STUB_TICK seconds per reading. Lockstep with the stubbed
+# sleeps it is an honest fast-forward; a single large tick is a suspend.
+cat >"$d/bin/date" <<'EOF'
+#!/bin/sh
+now=$(cat "$STUB_CLOCK" 2>/dev/null || echo 1000000)
+echo "$now"
+echo $((now + STUB_TICK)) >"$STUB_CLOCK"
+EOF
+
+printf '#!/bin/sh\nexit 0\n' >"$d/bin/sleep"
+chmod 755 "$d/bin"/*
+
+# withhold, then any VAR=VALUE overrides
+run() {
+	withhold=$1
+	shift
+	: >"$d/tries"
+	: >"$d/alerts"
+	rm -f "$d/clock"
+	env STUB_WITHHOLD="$withhold" STUB_TRIES="$d/tries" STUB_ROOT="$d/sync" \
+		STUB_ALERTS="$d/alerts" STUB_CLOCK="$d/clock" STUB_TICK=0 \
+		HOME="$d/home" XDG_STATE_HOME="$d/state" PATH="$d/bin:$PATH" \
+		"$@" sh "$CANARY"
+}
+alerts() { cat "$d/alerts"; }
+misses() { cat "$d/state/jotta-canary/misses" 2>/dev/null || echo 0; }
+
+fail=0
+ok() { echo "ok    $1"; }
+bad() { echo "FAIL  $1"; fail=1; }
+
+# 1. Lands on the third look, which is what a self-clearing jottad stall looks
+# like. Must exit 0, say so, alert nobody, and leave no miss on record.
+mkdir -p "$d/state/jotta-canary" && echo 1 >"$d/state/jotta-canary/misses"
+if out=$(run 2 STUB_TICK=60 2>&1); then
+	case $out in
+	*"canary landed after"*) ok "late landing reported, not alerted" ;;
+	*) bad "late landing exited 0 but said nothing: '$out'" ;;
+	esac
+else
+	bad "late landing was judged a miss"
+fi
+[ -s "$d/alerts" ] && bad "late landing paged the phone: $(alerts)"
+[ "$(misses)" = 0 ] || bad "late landing left a miss on record"
+
+# 2. Never lands, at the real default timings. The stub clock moves 60s per
+# reading in lockstep with the stubbed sleeps, so 25 minutes of polling passes
+# instantly and honestly. This is the case that pins the suspend guard to the
+# wait the run asked for: against the grace period plus two minutes it would
+# call a legitimate 12-minute poll a suspend and never reach a verdict.
+out=$(run 9999 STUB_TICK=60 2>&1) && bad "a canary that never landed exited 0"
+case $out in
+*"no verdict"*) bad "polling to the deadline was mistaken for a suspend" ;;
+*"canary missed"*) ok "never lands: one miss at the real 25 min deadline" ;;
+*) bad "never landing said something unexpected: '$out'" ;;
+esac
+[ -s "$d/alerts" ] && bad "the first miss paged the phone: $(alerts)"
+
+# 3. The second consecutive miss is the one that alerts.
+mkdir -p "$d/state/jotta-canary" && echo 1 >"$d/state/jotta-canary/misses"
+run 9999 STUB_TICK=60 >/dev/null 2>&1 && bad "the second miss exited 0"
+case $(alerts) in
+*"not uploaded for 2 runs"*) ok "second miss alerts, naming the runs" ;;
+*) bad "second miss sent no usable alert: '$(alerts)'" ;;
+esac
+
+# 4. A clock that jumps mid-wait is a suspend: the machine wakes with no network
+# and reads back the checksum from before it slept. No verdict, no miss, no page.
+rm -rf "$d/state"
+out=$(run 9999 STUB_TICK=99999 2>&1) || bad "a suspended run exited non-zero"
+case $out in
+*"no verdict"*) ok "a suspend mid-wait gives no verdict" ;;
+*) bad "a suspended run reached a verdict: '$out'" ;;
+esac
+[ -s "$d/alerts" ] && bad "a suspended run paged the phone: $(alerts)"
+[ "$(misses)" = 0 ] || bad "a suspended run counted as a miss"
+
+# 5. The deadline has to clear the worst self-clear seen in the journal (13m04s)
+# and the worst [Evaluating] spell of any kind (15m31s).
+deadline=$(sed -n 's/^CONFIRM_DEADLINE_SECONDS=${CONFIRM_DEADLINE_SECONDS:-\([0-9]*\)}$/\1/p' "$CANARY")
+if [ "${deadline:-0}" -ge 1200 ]; then
+	ok "deadline ${deadline}s clears the 15m31s worst case"
+else
+	bad "deadline ${deadline:-unset}s is inside jottad's self-clearing window"
+fi
+
+exit $fail
