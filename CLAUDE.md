@@ -183,6 +183,17 @@ outlasts the grace period by fifteen minutes, so the older formula reads every
 deadline-reaching run as a suspend, gives no verdict, and the canary goes
 permanently silent on real stalls. `canary-check` covers that specific mistake.
 
+A fourth alert, 2026-08-20 01:05:20, was a different path and a worse one: it
+exited **two seconds** in, on the liveness query, saying `jottad did not answer
+within 30s. Try: systemctl --user restart jottad`. jottad was fine — same pid for
+a day, mid full-check, and the run an hour earlier had queried it happily during
+the same kind of full-check — so the advice would have interrupted a healthy
+daemon. Two seconds is the tell: a real 30s timeout cannot exit that fast, so the
+query answered and simply had no `.Sync.RootPath` in it. The liveness check was
+the last path still judging on a single look, and it now asks `QUERY_ATTEMPTS`
+times and distinguishes silence, which a restart clears, from a reply with no
+root, which it does not.
+
 Two things this cost, worth not repeating: `jotta-cli ls` reports `Last
 Modified` as the *local* mtime, so its timestamp says 09:03 for a file the
 server took at 09:16 and cannot be used to time a landing — only the journal
@@ -192,6 +203,11 @@ extra run is another chance to sample one of these windows.
 
 ### Looks like signal, is not
 
+A long gap since the last full-check (`no full-check in 4h`), because a full-check
+is **not periodic**: jottad runs one when the sync loop restarts, so a long gap means
+the loop has not had to restart. Measured on a healthy daemon: an 8h gap on
+2026-08-18 and 15h45m from 2026-08-19 09:15 to 2026-08-20 01:00, with hourly canary
+uploads landing throughout both. `action none` beside it is right, not a contradiction ·
 `errors[0 files 0 bytes]` in scan lines (only non-zero matters) ·
 `localdb.found <checksum> in file <path>, copied to <root>/.jottaclouddownload/<id>`
 (jottad reusing a local file with a matching checksum instead of downloading it, so

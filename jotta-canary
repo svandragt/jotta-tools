@@ -19,6 +19,8 @@ UPLOAD_GRACE_SECONDS=${UPLOAD_GRACE_SECONDS:-600}
 CONFIRM_DEADLINE_SECONDS=${CONFIRM_DEADLINE_SECONDS:-1500}
 POLL_SECONDS=${POLL_SECONDS:-60}
 QUERY_DEADLINE=${QUERY_DEADLINE:-30}
+QUERY_ATTEMPTS=${QUERY_ATTEMPTS:-3}
+QUERY_RETRY_SECONDS=${QUERY_RETRY_SECONDS:-10}
 # A VPN, a suspended laptop or a brief server wobble stops uploads for one run
 # and then fixes itself. Only a miss that survives a second run is worth waking
 # someone for.
@@ -43,10 +45,36 @@ fi
 # guess makes the canary watch a directory nothing syncs, which passes forever.
 # The query doubles as a liveness check: jottad wedges by accepting the
 # connection and never replying, and that deserves an alert of its own.
-status=$(timeout "$QUERY_DEADLINE" jotta-cli status --json 2>/dev/null | sed -n '/^{/,$p')
-SYNC_ROOT=$(printf '%s' "$status" | jq -r '.Sync.RootPath // empty')
+#
+# But one unusable reply is not a dead daemon, and this was the last path still
+# judging on a single look. At 01:05:20 on 2026-08-20 it came back inside two
+# seconds with no root, sent "did not answer, try restarting jottad", and jottad
+# was fine: mid full-check, pid unchanged for a day, and the run an hour earlier
+# had queried it happily during the same kind of full-check. Restarting on that
+# advice would have interrupted a healthy daemon. A wedge fails every attempt,
+# a blip fails one, so ask again before saying anything.
+answered=''
+SYNC_ROOT=''
+attempt=1
+while :; do
+	status=$(timeout "$QUERY_DEADLINE" jotta-cli status --json 2>/dev/null | sed -n '/^{/,$p')
+	[ -n "$status" ] && answered=1
+	SYNC_ROOT=$(printf '%s' "$status" | jq -r '.Sync.RootPath // empty')
+	[ -n "$SYNC_ROOT" ] && break
+	[ "$attempt" -ge "$QUERY_ATTEMPTS" ] && break
+	attempt=$((attempt + 1))
+	sleep "$QUERY_RETRY_SECONDS"
+done
+
 if [ -z "$SYNC_ROOT" ]; then
-	notify "jottad did not answer within ${QUERY_DEADLINE}s. Try: systemctl --user restart jottad"
+	# Which of the two it is decides whether restarting jottad is even the right
+	# advice. Silence is a wedge and a restart clears it; a reply without a root
+	# is something else, and telling someone to restart would be a guess.
+	if [ -n "$answered" ]; then
+		notify "jottad answered $QUERY_ATTEMPTS times with no sync root. Check: jotta-buddy"
+	else
+		notify "jottad did not answer in $QUERY_ATTEMPTS tries. Try: systemctl --user restart jottad"
+	fi
 	exit 1
 fi
 

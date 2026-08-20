@@ -359,7 +359,13 @@ elif [ -n "$stopped" ] && { [ -z "$checked" ] || [ "$stopped" \> "$checked" ]; }
 elif [ -n "$checked" ]; then
 	group sync "${green}clean${off}  ${dim}full-check completed $(clock "$checked")${off}"
 else
-	group sync "${dim}no full-check in ${ERRSINCE#-}${off}"
+	# Not a fault, and it was read as one. A full-check is not periodic: jottad
+	# runs one when the sync loop restarts, so a long gap means the loop has not
+	# had to restart. Measured gaps on a healthy daemon: 8h on 2026-08-18, and
+	# 15h45m from 2026-08-19 09:15 to 2026-08-20 01:00, with hourly canary
+	# uploads landing throughout both. The row has no positive evidence to show,
+	# which is what the dim is for, so it says why rather than just going quiet.
+	group sync "${dim}no full-check in ${ERRSINCE#-}, and none due: jottad runs one when the loop restarts${off}"
 fi
 
 sub state "${shown}${dim}${extra}${off}"

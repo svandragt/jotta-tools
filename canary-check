@@ -25,8 +25,20 @@ EOF
 
 cat >"$d/bin/jotta-cli" <<'EOF'
 #!/bin/sh
-# status: answer with the sync root the canary should use.
-[ "$1" = status ] && { printf '{"Sync":{"RootPath":"%s"}}\n' "$STUB_ROOT"; exit 0; }
+# status: answer with the sync root the canary should use, after failing the
+# first STUB_STATUS_FAILS calls the way the real one did at 01:05 on 2026-08-20.
+# STUB_STATUS_MODE picks the failure: "quiet" prints nothing at all, which is a
+# wedge, and "rootless" answers without a sync root, which is not.
+if [ "$1" = status ]; then
+	n=$(cat "$STUB_STATUS_TRIES" 2>/dev/null || echo 0)
+	echo $((n + 1)) >"$STUB_STATUS_TRIES"
+	if [ "$n" -lt "${STUB_STATUS_FAILS:-0}" ]; then
+		[ "${STUB_STATUS_MODE:-rootless}" = quiet ] || echo '{"Sync":{}}'
+		exit 0
+	fi
+	printf '{"Sync":{"RootPath":"%s"}}\n' "$STUB_ROOT"
+	exit 0
+fi
 
 # ls: withhold the file for the first STUB_WITHHOLD calls. It exits 0 while
 # printing "nothing found", exactly as the real one does, so a canary that
@@ -54,11 +66,13 @@ chmod 755 "$d/bin"/*
 run() {
 	withhold=$1
 	shift
-	: >"$d/tries"
+	echo 0 >"$d/tries"
+	echo 0 >"$d/statustries"
 	: >"$d/alerts"
 	rm -f "$d/clock"
 	env STUB_WITHHOLD="$withhold" STUB_TRIES="$d/tries" STUB_ROOT="$d/sync" \
 		STUB_ALERTS="$d/alerts" STUB_CLOCK="$d/clock" STUB_TICK=0 \
+		STUB_STATUS_TRIES="$d/statustries" STUB_STATUS_FAILS=0 \
 		HOME="$d/home" XDG_STATE_HOME="$d/state" PATH="$d/bin:$PATH" \
 		"$@" sh "$CANARY"
 }
@@ -115,7 +129,37 @@ esac
 [ -s "$d/alerts" ] && bad "a suspended run paged the phone: $(alerts)"
 [ "$(misses)" = 0 ] || bad "a suspended run counted as a miss"
 
-# 5. The deadline has to clear the worst self-clear seen in the journal (13m04s)
+# 5. A liveness query that fails once and then answers is a blip, not a wedge.
+# This is the 01:05 false alarm: two seconds in, no root, "restart jottad", and
+# jottad was healthy. The run has to carry on to a real verdict instead.
+out=$(run 2 STUB_TICK=60 STUB_STATUS_FAILS=1 2>&1) || bad "one bad status reply was fatal"
+case $out in
+*"canary landed after"*) ok "a single unusable status reply is retried" ;;
+*) bad "a retried status query did not reach a verdict: '$out'" ;;
+esac
+[ -s "$d/alerts" ] && bad "a retried status query paged the phone: $(alerts)"
+
+# 6. Answering every time without a root is a real fault, but not the one a
+# restart fixes, so the advice must not be to restart.
+run 9999 STUB_STATUS_FAILS=99 >/dev/null 2>&1 && bad "a rootless daemon exited 0"
+case $(alerts) in
+*"no sync root"*)
+	case $(alerts) in
+	*restart*) bad "a rootless reply advised a restart: $(alerts)" ;;
+	*) ok "a rootless daemon is named, without restart advice" ;;
+	esac
+	;;
+*) bad "a rootless daemon sent no usable alert: '$(alerts)'" ;;
+esac
+
+# 7. Silence every time is the wedge, and that one does want a restart.
+run 9999 STUB_STATUS_FAILS=99 STUB_STATUS_MODE=quiet >/dev/null 2>&1 && bad "a wedged daemon exited 0"
+case $(alerts) in
+*"did not answer"*restart*) ok "a silent daemon still gets the restart advice" ;;
+*) bad "a wedged daemon sent no usable alert: '$(alerts)'" ;;
+esac
+
+# 8. The deadline has to clear the worst self-clear seen in the journal (13m04s)
 # and the worst [Evaluating] spell of any kind (15m31s).
 deadline=$(sed -n 's/^CONFIRM_DEADLINE_SECONDS=${CONFIRM_DEADLINE_SECONDS:-\([0-9]*\)}$/\1/p' "$CANARY")
 if [ "${deadline:-0}" -ge 1200 ]; then

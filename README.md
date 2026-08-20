@@ -121,8 +121,12 @@ miss.
 
 Asking for the path rather than assuming one is what stops the canary watching
 a directory nothing syncs, which would pass forever. The same query doubles as
-a liveness check: if jottad accepts the connection but never replies, the
-canary alerts immediately instead of waiting out the grace period.
+a liveness check, and it asks three times ten seconds apart before it concludes
+anything, because one unusable reply is not a dead daemon: a healthy jottad
+answered without a sync root once, in two seconds, and the resulting alert
+advised restarting it. Silence every time is a wedge and the alert says to
+restart; a reply with no sync root every time is something else and it does not,
+since restarting on that would be a guess.
 
 The canary is per host. A single shared canary file has as many writers as you
 have machines, and Jotta turns that into conflicted copies.
