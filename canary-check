@@ -139,27 +139,39 @@ case $out in
 esac
 [ -s "$d/alerts" ] && bad "a retried status query paged the phone: $(alerts)"
 
-# 6. Answering every time without a root is a real fault, but not the one a
-# restart fixes, so the advice must not be to restart.
+# 6. A reply without a root is jottad mid-operation: a GetCustomer/list-tree
+# deadline holds it there with no root in status for 13-15 min before clearing
+# itself (09:05 on 2026-08-20, three rootless replies inside 26s, healthy again
+# by 09:17). The liveness gate runs before the patient upload loop, so one
+# rootless run must not page, the same way one upload miss does not.
+rm -rf "$d/state"
 run 9999 STUB_STATUS_FAILS=99 >/dev/null 2>&1 && bad "a rootless daemon exited 0"
+[ -s "$d/alerts" ] && bad "one rootless run paged the phone: $(alerts)"
+[ "$(misses)" = 1 ] || bad "one rootless run left no miss on record"
+
+# 7. The second consecutive rootless run alerts, and the advice is not a restart:
+# a rootless reply is not the fault a restart fixes.
+run 9999 STUB_STATUS_FAILS=99 >/dev/null 2>&1 && bad "a persistently rootless daemon exited 0"
 case $(alerts) in
 *"no sync root"*)
 	case $(alerts) in
 	*restart*) bad "a rootless reply advised a restart: $(alerts)" ;;
-	*) ok "a rootless daemon is named, without restart advice" ;;
+	*) ok "a rootless daemon alerts on the second run, without restart advice" ;;
 	esac
 	;;
-*) bad "a rootless daemon sent no usable alert: '$(alerts)'" ;;
+*) bad "a persistently rootless daemon sent no usable alert: '$(alerts)'" ;;
 esac
 
-# 7. Silence every time is the wedge, and that one does want a restart.
+# 8. Silence every time is the wedge, and that one does want a restart, on the
+# first run: a wedge stays wedged, so there is nothing to wait a second run for.
+rm -rf "$d/state"
 run 9999 STUB_STATUS_FAILS=99 STUB_STATUS_MODE=quiet >/dev/null 2>&1 && bad "a wedged daemon exited 0"
 case $(alerts) in
-*"did not answer"*restart*) ok "a silent daemon still gets the restart advice" ;;
+*"did not answer"*restart*) ok "a silent daemon gets the restart advice on run one" ;;
 *) bad "a wedged daemon sent no usable alert: '$(alerts)'" ;;
 esac
 
-# 8. The deadline has to clear the worst self-clear seen in the journal (13m04s)
+# 9. The deadline has to clear the worst self-clear seen in the journal (13m04s)
 # and the worst [Evaluating] spell of any kind (15m31s).
 deadline=$(sed -n 's/^CONFIRM_DEADLINE_SECONDS=${CONFIRM_DEADLINE_SECONDS:-\([0-9]*\)}$/\1/p' "$CANARY")
 if [ "${deadline:-0}" -ge 1200 ]; then

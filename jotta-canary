@@ -66,15 +66,33 @@ while :; do
 	sleep "$QUERY_RETRY_SECONDS"
 done
 
+# Both the liveness gate and the upload loop below page only on the second run
+# in a row, so a self-clearing stall never wakes anyone. Reset lives with the
+# landed case, so any healthy run clears the count.
+bump_miss() {
+	mkdir -p "$(dirname "$MISS_COUNT")"
+	misses=$(( $(cat "$MISS_COUNT" 2>/dev/null || echo 0) + 1 ))
+	printf '%s\n' "$misses" >"$MISS_COUNT"
+}
+
 if [ -z "$SYNC_ROOT" ]; then
-	# Which of the two it is decides whether restarting jottad is even the right
-	# advice. Silence is a wedge and a restart clears it; a reply without a root
-	# is something else, and telling someone to restart would be a guess.
-	if [ -n "$answered" ]; then
-		notify "jottad answered $QUERY_ATTEMPTS times with no sync root. Check: jotta-buddy"
-	else
+	# Silence is a wedge: it stays wedged, so page now with the one advice that
+	# clears it. A reply without a root is jottad mid-operation instead: a
+	# GetCustomer/list-tree deadline parks it in [Evaluating] for 13-15 min with
+	# no root in status, then it clears itself (seen 09:05 on 2026-08-20, three
+	# rootless replies inside 26s, healthy again by 09:17). That is the same
+	# self-healing stall the upload loop rides out, and the liveness gate runs
+	# first with only a 26s window, so it must not page on one run either.
+	if [ -z "$answered" ]; then
 		notify "jottad did not answer in $QUERY_ATTEMPTS tries. Try: systemctl --user restart jottad"
+		exit 1
 	fi
+	bump_miss
+	if [ "$misses" -lt "$MISSES_BEFORE_ALERT" ]; then
+		echo "jottad answered with no sync root ($misses of $MISSES_BEFORE_ALERT), no alert yet"
+		exit 1
+	fi
+	notify "jottad answered with no sync root for $misses runs. Check: jotta-buddy"
 	exit 1
 fi
 
@@ -144,10 +162,7 @@ if [ "$verdict" = landed ]; then
 	exit 0
 fi
 
-mkdir -p "$(dirname "$MISS_COUNT")"
-misses=$(( $(cat "$MISS_COUNT" 2>/dev/null || echo 0) + 1 ))
-printf '%s\n' "$misses" >"$MISS_COUNT"
-
+bump_miss
 if [ "$misses" -lt "$MISSES_BEFORE_ALERT" ]; then
 	echo "canary missed ($misses of $MISSES_BEFORE_ALERT), no alert yet"
 	exit 1
