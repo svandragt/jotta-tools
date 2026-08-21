@@ -9,6 +9,7 @@
 - [The Third Legend — The Bird Who Cried Wedge](#the-third-legend-the-bird-who-cried-wedge)
 - [The Fourth Legend — The Riddle of the Waking Sleeper](#the-fourth-legend-the-riddle-of-the-waking-sleeper)
 - [The Fifth Legend — The Silent Warden Who Yet Lived](#the-fifth-legend-the-silent-warden-who-yet-lived)
+- [The Sixth Legend — The Two Flights of One Waking](#the-sixth-legend-the-two-flights-of-one-waking)
 - [The Moral](#the-moral-as-the-elders-set-it-down)
 
 ---
@@ -155,6 +156,45 @@ and knock again before it cried anything. Only the *words* of the alarm still
 forked: a silence that outlasts two flights is a true wedge, and *then* you may
 shake him; an empty answer that outlasts two is some other ill, and shaking is only
 a guess.
+
+## The Sixth Legend: The Two Flights of One Waking
+
+Every law the bird had learned so far was about the Keeper's sleep. It had never
+once thought about its own — or about the sleep of the whole land.
+
+For the village did not wake and work forever. There came cold seasons when the
+land itself lay down: hearths banked, roads emptied, the very sea drawn back from
+the shore, and everyone and everything still as death for a long while. Then the
+land would stir again all at once. But a land does not wake all at once. The
+Keeper woke before the sea returned, and for a spell he stood at the darkened
+shore with the caravan loaded and nowhere to send it, falling — of course — into
+the very Trance of the World-Tree the bird had learned so patiently to forgive.
+
+Here was the trap the bird walked straight into. It had been taught the Law of
+the Second Sign: fly, and if the road seems shut, fly *again a full turn of the
+hour later*, and cry only what fails both times. That law leaned its whole weight
+on one quiet assumption — that two flights are **two** looks, taken far enough
+apart to be honest witnesses. But a waking breaks clocks. The bird's first flight
+came the instant the land stirred; its second came hard on its heels, both of
+them inside the same short spell before the sea came back — two flights, yes, but
+of a single waking, both seeing the one outage. And so it cried a wedge that was
+no wedge, exactly as in its youngest and most foolish days, having obeyed the
+letter of the law that was written to prevent it.
+
+The elders saw the flaw was not in the counting but beneath it, and gave the bird
+its last law, the **Law of the Sleeping Land**: *before you weigh any sign at
+all, ask first whether the land has only just woken.* If the world itself slept
+and has just now stirred, no failure is a verdict — not a shut road, not a silent
+tower, not a mark that will not write — for the waking both makes the trouble and
+crowds your two flights into one. Wait until the land is truly abroad again; only
+then do two flights count as two. A trouble that outlasts the waking is real and
+will still be there to find; a trouble that is only the world rubbing its eyes
+will be gone before you would have cried.
+
+And the bird understood at last that its sight had never been the whole of
+wisdom. It had learned every mask the Keeper's sleep could wear; now it learned
+to know the hour of its own — that there are mornings when a watchman's first
+duty is to say nothing, because nothing yet is awake enough to judge.
 
 ---
 

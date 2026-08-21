@@ -108,6 +108,16 @@ legitimately outlasts the grace period by fifteen minutes. The timer
 leaves out `Persistent=true` for the same reason, since a catch-up run fires the
 moment the machine resumes and reports a miss for a sync that is fine.
 
+That clock guard only sees a suspend *during* a run. A suspend just *before* one
+is worse: the machine wakes, the network is not back yet, jottad falls into its
+own list-tree stall, and the next hourly run fires minutes later still inside the
+outage, so two misses in a row both belong to one wake. That defeats the
+second-miss hold, which assumes the two runs sample an hour apart. So any failure
+within `RESUME_GRACE_SECONDS` (the confirm deadline, 25 minutes) of the last
+`PM: suspend exit` in the kernel log is treated as a blip on every path, upload
+miss or liveness failure alike: no page, no miss recorded. A stall that outlasts
+the window still pages on a later run.
+
 A single miss does not alert either. A VPN or a brief server wobble stops
 uploads for one run and then clears on its own, so the alert waits for a
 second miss in a row, roughly an hour later on the hourly timer. With the

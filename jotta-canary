@@ -26,6 +26,15 @@ QUERY_RETRY_SECONDS=${QUERY_RETRY_SECONDS:-10}
 # someone for.
 MISSES_BEFORE_ALERT=${MISSES_BEFORE_ALERT:-2}
 MISS_COUNT="${XDG_STATE_HOME:-$HOME/.local/state}/jotta-canary/misses"
+# A resume from suspend is never a verdict, on any path. The network is often
+# not back yet (on 2026-08-21 jottad's own list-tree stall ran to 14:10, 17 min
+# after a 13:53 wake), and the wake also collapses the timer cadence: the resume
+# run and the next hourly run land minutes apart inside one outage, so the Law of
+# the Second Sign cannot tell a wake blip from a real stall. The mid-wait suspend
+# guard below only covers a suspend *during* the run; this covers one just before
+# it. A stall that outlasts the window still pages on a later run.
+RESUME_GRACE_SECONDS=${RESUME_GRACE_SECONDS:-$CONFIRM_DEADLINE_SECONDS}
+LAST_RESUME=${LAST_RESUME-$(journalctl -k -o short-unix --grep 'PM: suspend exit' 2>/dev/null | tail -1 | cut -d. -f1)}
 
 notify() {
 	curl -fsS \
@@ -75,7 +84,18 @@ bump_miss() {
 	printf '%s\n' "$misses" >"$MISS_COUNT"
 }
 
+# Called first on every failure path. Within a resume window the failure is a
+# wake artefact, not a stall, so exit clean: no page, no miss recorded. Returns
+# so the caller carries on when this run did not follow a suspend.
+resume_blip() {
+	[ -n "$LAST_RESUME" ] || return 0
+	[ "$(( $(date +%s) - LAST_RESUME ))" -lt "$RESUME_GRACE_SECONDS" ] || return 0
+	echo "resumed from suspend under ${RESUME_GRACE_SECONDS}s ago, treating as a blip"
+	exit 0
+}
+
 if [ -z "$SYNC_ROOT" ]; then
+	resume_blip
 	# A failed liveness check is not a verdict on one look. The self-healing
 	# list-tree stall parks jottad in [Evaluating] for 13-15 min, and while it is
 	# there the status socket either answers without a root (09:05 on 2026-08-20,
@@ -104,6 +124,7 @@ REMOTE_CANARY="Sync/.canary-$(hostname)"
 
 started=$(date +%s)
 printf '%s\n' "$started" >"$CANARY" || {
+	resume_blip
 	notify "Cannot write the canary $CANARY."
 	exit 1
 }
@@ -165,6 +186,7 @@ if [ "$verdict" = landed ]; then
 	exit 0
 fi
 
+resume_blip
 bump_miss
 if [ "$misses" -lt "$MISSES_BEFORE_ALERT" ]; then
 	echo "canary missed ($misses of $MISSES_BEFORE_ALERT), no alert yet"

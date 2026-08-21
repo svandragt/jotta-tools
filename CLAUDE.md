@@ -105,6 +105,7 @@ the only durable record.
    | III — The Bird Who Cried Wedge | single-look miss alarms → `MISSES_BEFORE_ALERT` |
    | IV — The Riddle of the Waking Sleeper | eyeblink rootless reply → `QUERY_ATTEMPTS`, silence vs no-root |
    | V — The Silent Warden Who Yet Lived | silence *during* the stall → both liveness omens held to a second run |
+   | VI — The Two Flights of One Waking | suspend *before* the run → `RESUME_GRACE_SECONDS`, any failure within a resume window is a blip |
 
 ### Known faults
 
@@ -225,6 +226,26 @@ wants a restart; a rootless reply that survives one does not. `canary-check`
 covers both. The lesson generalises: no liveness symptom is a verdict on the
 first run, because every stall this daemon has is self-clearing until proven
 otherwise across a cadence.
+
+A seventh and eighth alert, 22 and 32 min apart on 2026-08-21 (~13:54 and
+~14:03), were the same self-heal again but reached through a *suspend*, and that
+was a genuinely new path. The laptop was suspended 13:00:54-13:53:34; it woke
+with the Jottacloud IPv6 route still unreachable (`network is unreachable`
+through 14:10), jottad ran its `failed to list tree` `[Evaluating]` stall
+13:54-14:10 and recovered same pid at 14:11. Neither canary run wrote the canary
+file (mtime stayed at the 12:03 landing) and neither left a miss on record, so
+both failed early — before `bump_miss`. The trap: the mid-wait suspend guard
+(clock vs the wait the run asked for) only sees a suspend *during* a run, and the
+second-miss hold assumes the two runs sample an hour apart. A suspend breaks
+both — it causes the outage (network catching up on wake) *and* collapses the
+cadence, firing the resume run and the next hourly run minutes apart inside one
+outage, so two misses both belong to one waking. The fix is generic and covers
+every exit path: `RESUME_GRACE_SECONDS` (defaults to the confirm deadline) reads
+the last `PM: suspend exit` from the kernel log, and any failure within that
+window of a wake is a blip — no page, no miss — upload miss or liveness failure
+alike. A stall that outlasts the window still pages on a later run. `canary-check`
+cases 11-13 cover it, including the bound (a resume long ago does not swallow a
+real stall). This is Legend VI.
 
 Two things this cost, worth not repeating: `jotta-cli ls` reports `Last
 Modified` as the *local* mtime, so its timestamp says 09:03 for a file the
