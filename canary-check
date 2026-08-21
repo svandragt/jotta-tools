@@ -162,16 +162,23 @@ case $(alerts) in
 *) bad "a persistently rootless daemon sent no usable alert: '$(alerts)'" ;;
 esac
 
-# 8. Silence every time is the wedge, and that one does want a restart, on the
-# first run: a wedge stays wedged, so there is nothing to wait a second run for.
+# 8. Silence is a self-clearing stall too: on 2026-08-21 01:01-01:16 the status
+# socket timed out through a failed-to-list-tree [Evaluating] spell jottad
+# recovered from on its own, same pid. So one silent run must not page either.
 rm -rf "$d/state"
-run 9999 STUB_STATUS_FAILS=99 STUB_STATUS_MODE=quiet >/dev/null 2>&1 && bad "a wedged daemon exited 0"
+run 9999 STUB_STATUS_FAILS=99 STUB_STATUS_MODE=quiet >/dev/null 2>&1 && bad "a silent daemon exited 0"
+[ -s "$d/alerts" ] && bad "one silent run paged the phone: $(alerts)"
+[ "$(misses)" = 1 ] || bad "one silent run left no miss on record"
+
+# 9. The second consecutive silent run is the wedge, and that one does want a
+# restart.
+run 9999 STUB_STATUS_FAILS=99 STUB_STATUS_MODE=quiet >/dev/null 2>&1 && bad "a persistently silent daemon exited 0"
 case $(alerts) in
-*"did not answer"*restart*) ok "a silent daemon gets the restart advice on run one" ;;
+*"did not answer"*restart*) ok "a silent daemon gets the restart advice on the second run" ;;
 *) bad "a wedged daemon sent no usable alert: '$(alerts)'" ;;
 esac
 
-# 9. The deadline has to clear the worst self-clear seen in the journal (13m04s)
+# 10. The deadline has to clear the worst self-clear seen in the journal (13m04s)
 # and the worst [Evaluating] spell of any kind (15m31s).
 deadline=$(sed -n 's/^CONFIRM_DEADLINE_SECONDS=${CONFIRM_DEADLINE_SECONDS:-\([0-9]*\)}$/\1/p' "$CANARY")
 if [ "${deadline:-0}" -ge 1200 ]; then

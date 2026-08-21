@@ -194,6 +194,22 @@ the last path still judging on a single look, and it now asks `QUERY_ATTEMPTS`
 times and distinguishes silence, which a restart clears, from a reply with no
 root, which it does not.
 
+A fifth and sixth alert taught that even `QUERY_ATTEMPTS` looks inside one run
+are still one look. Both were the ordinary `failed to list tree` self-heal seen
+through the liveness gate rather than the upload loop. On 2026-08-20 09:05 jottad
+answered three times with no root through a 15m43s `[Evaluating]` spell; on
+2026-08-21 01:04 it did not answer at all through a 15m37s one (`connection
+refused` listing the remote tree, status socket silent, journal logging nothing),
+and both times it recovered on its own with the same pid. So a self-clearing
+stall shows up at the liveness gate as *either* a rootless reply *or* total
+silence, and "silence means wedge, page now" was wrong: the gate must hold both
+symptoms to a second run, exactly as an upload miss is held, before paging. Only
+the advice still forks — silence that survives a second run is a real wedge and
+wants a restart; a rootless reply that survives one does not. `canary-check`
+covers both. The lesson generalises: no liveness symptom is a verdict on the
+first run, because every stall this daemon has is self-clearing until proven
+otherwise across a cadence.
+
 Two things this cost, worth not repeating: `jotta-cli ls` reports `Last
 Modified` as the *local* mtime, so its timestamp says 09:03 for a file the
 server took at 09:16 and cannot be used to time a landing — only the journal

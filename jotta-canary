@@ -76,23 +76,26 @@ bump_miss() {
 }
 
 if [ -z "$SYNC_ROOT" ]; then
-	# Silence is a wedge: it stays wedged, so page now with the one advice that
-	# clears it. A reply without a root is jottad mid-operation instead: a
-	# GetCustomer/list-tree deadline parks it in [Evaluating] for 13-15 min with
-	# no root in status, then it clears itself (seen 09:05 on 2026-08-20, three
-	# rootless replies inside 26s, healthy again by 09:17). That is the same
-	# self-healing stall the upload loop rides out, and the liveness gate runs
-	# first with only a 26s window, so it must not page on one run either.
-	if [ -z "$answered" ]; then
-		notify "jottad did not answer in $QUERY_ATTEMPTS tries. Try: systemctl --user restart jottad"
-		exit 1
-	fi
+	# A failed liveness check is not a verdict on one look. The self-healing
+	# list-tree stall parks jottad in [Evaluating] for 13-15 min, and while it is
+	# there the status socket either answers without a root (09:05 on 2026-08-20,
+	# three rootless replies in 26s) or does not answer at all (01:01-01:16 on
+	# 2026-08-21, status timed out three times, jottad logging nothing) — and it
+	# recovered on its own both times, same pid. Either symptom clears within one
+	# timer cadence, so hold both to a second run, the same as an upload miss. The
+	# advice differs: silence that persists is a wedge a restart clears; a rootless
+	# reply that persists is not.
 	bump_miss
+	if [ -n "$answered" ]; then
+		alert="jottad answered with no sync root for $misses runs. Check: jotta-buddy"
+	else
+		alert="jottad did not answer in $QUERY_ATTEMPTS tries, $misses runs. Try: systemctl --user restart jottad"
+	fi
 	if [ "$misses" -lt "$MISSES_BEFORE_ALERT" ]; then
-		echo "jottad answered with no sync root ($misses of $MISSES_BEFORE_ALERT), no alert yet"
+		echo "liveness check failed ($misses of $MISSES_BEFORE_ALERT), no alert yet"
 		exit 1
 	fi
-	notify "jottad answered with no sync root for $misses runs. Check: jotta-buddy"
+	notify "$alert"
 	exit 1
 fi
 
