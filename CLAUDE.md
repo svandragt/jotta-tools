@@ -94,7 +94,17 @@ the only durable record.
    how it judges* — not merely a new string, but a new lesson about when to cry —
    append the next legend to `LEGENDS.md`. Existing legends are immutable: add,
    never edit. A routine matcher tweak does not earn one; a fault that overturned
-   an assumption does.
+   an assumption does. Keep `LEGENDS.md` pure fable — no error strings, no
+   filenames, no maintenance notes inside it; the mapping to real faults lives
+   here, not there:
+
+   | Legend | Fault |
+   |---|---|
+   | I — The Twins of One Name | `Case Collision in tree` |
+   | II — The Trance of the World-Tree | `failed to list tree` / the `[Evaluating]` stall |
+   | III — The Bird Who Cried Wedge | single-look miss alarms → `MISSES_BEFORE_ALERT` |
+   | IV — The Riddle of the Waking Sleeper | eyeblink rootless reply → `QUERY_ATTEMPTS`, silence vs no-root |
+   | V — The Silent Warden Who Yet Lived | silence *during* the stall → both liveness omens held to a second run |
 
 ### Known faults
 

@@ -1,31 +1,15 @@
 # The Legends of the Canary and the Sleeping Keeper
 
-*The same lore as `CLAUDE.md`, told as it might be told by firelight three hundred
-years on, when nobody remembers what a daemon was.*
+## The Tellings
 
-*The legends below are **immutable**. Each is a fault that was survived and
-understood, set down once and not rewritten. When a new fault is found and fixed,
-the way to honour it here is to **append the next legend** — never to edit an old
-one. A story that keeps changing is not a memory, and the point of this file is
-memory.*
-
-## Index of Legends
-
-| # | Legend | The fault it remembers |
-|---|---|---|
-| — | [Prologue: The Keeper of the Vault](#prologue-the-keeper-of-the-vault) | why the daemon's own word is no proof |
-| — | [The Bird](#the-bird) | why we send a canary at all |
-| I | [The Twins of One Name](#the-first-legend-the-twins-of-one-name) | `Case Collision in tree` — one stone halts the whole road |
-| II | [The Trance of the World-Tree](#the-second-legend-the-trance-of-the-world-tree) | `failed to list tree` — the 13-15 min self-clearing `[Evaluating]` stall |
-| III | [The Bird Who Cried Wedge](#the-third-legend-the-bird-who-cried-wedge) | single-look false alarms — the Law of the Second Sign (`MISSES_BEFORE_ALERT`) |
-| IV | [The Riddle of the Waking Sleeper](#the-fourth-legend-the-riddle-of-the-waking-sleeper) | the eyeblink rootless reply — knock thrice, tell silence from no-root |
-| V | [The Silent Warden Who Yet Lived](#the-fifth-legend-the-silent-warden-who-yet-lived) | silence *during* the trance — both liveness omens held to a second sign |
-| | [The Moral](#the-moral-as-the-elders-set-it-down) | no single sign is a verdict |
-
-*Faults still awaiting their legend: the DNS that loses the road until the name
-resolves; the folder the Vault accepts on the way in but never on the way out; the
-false treasures that glitter like faults and are only the Keeper humming. Their
-plain truth lives in `CLAUDE.md`.*
+- [Prologue: The Keeper of the Vault](#prologue-the-keeper-of-the-vault)
+- [The Bird](#the-bird)
+- [The First Legend — The Twins of One Name](#the-first-legend-the-twins-of-one-name)
+- [The Second Legend — The Trance of the World-Tree](#the-second-legend-the-trance-of-the-world-tree)
+- [The Third Legend — The Bird Who Cried Wedge](#the-third-legend-the-bird-who-cried-wedge)
+- [The Fourth Legend — The Riddle of the Waking Sleeper](#the-fourth-legend-the-riddle-of-the-waking-sleeper)
+- [The Fifth Legend — The Silent Warden Who Yet Lived](#the-fifth-legend-the-silent-warden-who-yet-lived)
+- [The Moral](#the-moral-as-the-elders-set-it-down)
 
 ---
 
@@ -184,3 +168,13 @@ a guess.
 And the bird, which had cried wolf on three nights and death on two, grew at last
 into the thing the village had always needed: not a bird that noticed everything,
 but a bird that woke them **only for what was still wrong when it looked twice.**
+
+---
+
+*And there are troubles the Keeper suffers that have not yet been made into
+legend: the day the road to the Keep is lost because no one can any longer say its
+name, until the name is found again; the folder whose name the Vault will take on
+the way in but never give back on the way out, cursed to be renamed and never
+deleted; and the false treasures that glitter like faults and are only the Keeper
+humming to himself. These await their own tellings, when the ones who survive them
+sit down at last to write.*
