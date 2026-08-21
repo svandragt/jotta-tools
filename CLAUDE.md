@@ -90,6 +90,12 @@ the only durable record.
    example. A row that names a fault without saying how to clear it just
    relocates the confusion.
 
+9. **Consider a legend.** If the fault taught something the bird had to *change
+   how it judges* — not merely a new string, but a new lesson about when to cry —
+   append the next legend to `LEGENDS.md`. Existing legends are immutable: add,
+   never edit. A routine matcher tweak does not earn one; a fault that overturned
+   an assumption does.
+
 ### Known faults
 
 | Fault | Loop | Retry | Blocks | Clears by |
